@@ -54,7 +54,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
     const payload = {
       model: 'deepseek-chat',
       messages: [
-        { role: 'system', content: 'You are a history expert who creates educational quiz questions. Always respond with valid JSON only.' },
+        { role: 'system', content: 'Tu es un expert en histoire qui crée des questions de quiz éducatives. Réponds toujours uniquement avec du JSON valide en français.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.7
@@ -265,10 +265,28 @@ app.get('/api/test-deepseek', async (req, res) => {
   }
 });
 
+// Error handling
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  process.exit(0);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  process.exit(1);
+});
+
 // Start the server
-app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`API endpoint available at http://localhost:${PORT}/api/generate-quiz`);
   console.log(`Health check available at http://localhost:${PORT}/api/health`);
   console.log(`DeepSeek test available at http://localhost:${PORT}/api/test-deepseek`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`DeepSeek API Key configured: ${!!process.env.DEEPSEEK_API_KEY}`);
 });
