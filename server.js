@@ -40,11 +40,10 @@ app.post('/api/generate-quiz', async (req, res) => {
   {
     "question": "Texte de la question",
     "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": "Option correcte",
-    "explication": "Explication de la réponse"
+    "answer": "Option correcte"
   }
 ]
-La difficulté des questions est ${difficulty}. Ne réponds que par le JSON strictement, sans texte avant ou après.`;
+La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
     console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
 
     // LOG 4 : Présence de la clé API
@@ -54,7 +53,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
     const payload = {
       model: 'deepseek-chat',
       messages: [
-        { role: 'system', content: 'Tu es un universitaire émérite depuis 30 ans et expert dans les questions éducatives.' },
+        { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.7
@@ -85,29 +84,19 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
       });
     }
 
-    // LOG 8 : Extraction du contenu - CORRECTION ICI
+    // LOG 8 : Extraction du contenu
     const content = response.data.choices?.[0]?.message?.content;
     console.log("[/api/generate-quiz] Contenu reçu :", content);
 
-    if (!content) {
-      console.error("[/api/generate-quiz] Aucun contenu reçu");
-      return res.status(500).json({ error: 'No content received from DeepSeek' });
-    }
-
     let questions;
     try {
-      // LOG 9 : Tentative de parsing direct
+      // LOG 9 : Parsing JSON
       questions = JSON.parse(content);
       console.log("[/api/generate-quiz] Parsing JSON réussi !");
     } catch (parseError) {
       // LOG 10 : Parsing échoué, tentative d'extraction
       console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative d'extraction du JSON du texte...");
-      
-      // Nettoyer le contenu
-      let cleanContent = content.replace(/```json|```/g, '').trim();
-      
-      // Extraire le JSON avec regex
-      const jsonMatch = cleanContent.match(/\[[\s\S]*\]/);
+      const jsonMatch = content && content.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         try {
           questions = JSON.parse(jsonMatch[0]);
@@ -130,8 +119,6 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
 
     // LOG 11 : Succès final
     console.log("[/api/generate-quiz] Quiz généré avec succès !");
-    
-    // CORRECTION : Retourner la structure attendue par le frontend
     res.json(questions);
 
   } catch (error) {
