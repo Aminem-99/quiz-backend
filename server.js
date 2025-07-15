@@ -54,12 +54,12 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
     const payload = {
       model: 'deepseek-chat',
       messages: [
-        { role: 'system', content: 'Tu es un expert en histoire qui crée des questions de quiz éducatives. Réponds toujours uniquement avec du JSON valide en français.' },
+        { role: 'system', content: 'Tu es un universitaire émérite depuis 30 ans et expert dans les questions éducatives.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.7
     };
-    console.log("[/api/generate-quiz] Payload DeepSeek :", JSON.stringify(payload, null, 2));
+    console.log("[/api/generate-quiz] Payload DeepSeek :", JSON.stringify(payload));
 
     // LOG 6 : Appel à l'API DeepSeek
     let response;
@@ -71,147 +71,71 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-          },
-          timeout: 30000 // 30 secondes de timeout
+          }
         }
       );
       console.log("[/api/generate-quiz] Status code DeepSeek :", response.status);
-      console.log("[/api/generate-quiz] Réponse complète DeepSeek :", JSON.stringify(response.data, null, 2));
+      console.log("[/api/generate-quiz] Réponse brute DeepSeek :", response.data);
     } catch (apiError) {
       // LOG 7 : Erreur lors de l'appel à DeepSeek
-      console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :");
-      console.error("Status:", apiError.response?.status);
-      console.error("Data:", apiError.response?.data);
-      console.error("Message:", apiError.message);
+      console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :", apiError.response ? apiError.response.data : apiError.message);
       return res.status(500).json({ 
         error: 'Erreur lors de l\'appel à DeepSeek',
-        details: apiError.response?.data || apiError.message
+        details: apiError.response ? apiError.response.data : apiError.message
       });
     }
 
-    // LOG 8 : Extraction du contenu
-    const messageContent = response.data.choices?.[0]?.message?.content;
-    console.log("[/api/generate-quiz] Contenu du message reçu :", messageContent);
+    // LOG 8 : Extraction du contenu - CORRECTION ICI
+    const content = response.data.choices?.[0]?.message?.content;
+    console.log("[/api/generate-quiz] Contenu reçu :", content);
 
-    if (!messageContent) {
-      console.error("[/api/generate-quiz] Aucun contenu reçu de DeepSeek");
-      return res.status(500).json({ 
-        error: 'Aucun contenu reçu de DeepSeek',
-        details: 'La réponse est vide'
-      });
+    if (!content) {
+      console.error("[/api/generate-quiz] Aucun contenu reçu");
+      return res.status(500).json({ error: 'No content received from DeepSeek' });
     }
 
     let questions;
     try {
-      // LOG 9 : Nettoyage du contenu
-      let cleanContent = messageContent.trim();
-      
-      // Supprimer les balises markdown si présentes
-      cleanContent = cleanContent.replace(/```json|```/g, '').trim();
-      
-      // Supprimer tout texte avant le premier [
-      const startIndex = cleanContent.indexOf('[');
-      if (startIndex > 0) {
-        cleanContent = cleanContent.substring(startIndex);
-      }
-      
-      // Supprimer tout texte après le dernier ]
-      const endIndex = cleanContent.lastIndexOf(']');
-      if (endIndex !== -1 && endIndex < cleanContent.length - 1) {
-        cleanContent = cleanContent.substring(0, endIndex + 1);
-      }
-      
-      console.log("[/api/generate-quiz] Contenu nettoyé :", cleanContent);
-      
-      // Parsing JSON
-      questions = JSON.parse(cleanContent);
+      // LOG 9 : Tentative de parsing direct
+      questions = JSON.parse(content);
       console.log("[/api/generate-quiz] Parsing JSON réussi !");
-      console.log("[/api/generate-quiz] Questions parsées :", JSON.stringify(questions, null, 2));
-      
     } catch (parseError) {
-      // LOG 10 : Parsing échoué, tentative d'extraction plus agressive
+      // LOG 10 : Parsing échoué, tentative d'extraction
       console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative d'extraction du JSON du texte...");
-      console.error("[/api/generate-quiz] Erreur de parsing :", parseError.message);
       
-      // Tentative d'extraction du JSON avec regex plus robuste
-      const jsonMatch = messageContent.match(/\[[\s\S]*?\]/);
+      // Nettoyer le contenu
+      let cleanContent = content.replace(/```json|```/g, '').trim();
+      
+      // Extraire le JSON avec regex
+      const jsonMatch = cleanContent.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         try {
           questions = JSON.parse(jsonMatch[0]);
-          console.log("[/api/generate-quiz] Extraction JSON réussie avec regex !");
+          console.log("[/api/generate-quiz] Extraction JSON réussie !");
         } catch (extractError) {
-          console.error("[/api/generate-quiz] Extraction JSON échouée avec regex :", extractError.message);
+          console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
           return res.status(500).json({ 
             error: 'Failed to parse API response (extraction)',
-            details: extractError.message,
-            rawContent: messageContent
+            details: extractError.message
           });
         }
       } else {
         console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte.");
         return res.status(500).json({ 
-          error: 'Failed to parse API response - no JSON found',
-          details: parseError.message,
-          rawContent: messageContent
+          error: 'Failed to parse API response',
+          details: parseError.message
         });
       }
     }
 
-    // LOG 11 : Validation des questions
-    if (!Array.isArray(questions)) {
-      console.error("[/api/generate-quiz] Le résultat n'est pas un tableau");
-      return res.status(500).json({ 
-        error: 'Invalid response format - not an array',
-        details: 'Expected an array of questions'
-      });
-    }
-
-    if (questions.length === 0) {
-      console.error("[/api/generate-quiz] Aucune question générée");
-      return res.status(500).json({ 
-        error: 'No questions generated',
-        details: 'The array is empty'
-      });
-    }
-
-    // Validation de la structure des questions
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      if (!q.question || !q.options || !q.answer) {
-        console.error(`[/api/generate-quiz] Question ${i + 1} mal formée:`, q);
-        return res.status(500).json({ 
-          error: `Question ${i + 1} has invalid format`,
-          details: 'Missing required fields: question, options, or answer'
-        });
-      }
-      
-      if (!Array.isArray(q.options) || q.options.length !== 4) {
-        console.error(`[/api/generate-quiz] Question ${i + 1} n'a pas 4 options:`, q.options);
-        return res.status(500).json({ 
-          error: `Question ${i + 1} must have exactly 4 options`,
-          details: 'Each question must have 4 answer choices'
-        });
-      }
-    }
-
-    // LOG 12 : Succès final
+    // LOG 11 : Succès final
     console.log("[/api/generate-quiz] Quiz généré avec succès !");
-    console.log("[/api/generate-quiz] Nombre de questions :", questions.length);
     
-    res.json({
-      success: true,
-      quiz: questions,
-      metadata: {
-        difficulty,
-        category,
-        period,
-        geographical_sphere,
-        questionCount: questions.length
-      }
-    });
+    // CORRECTION : Retourner la structure attendue par le frontend
+    res.json(questions);
 
   } catch (error) {
-    // LOG 13 : Erreur inattendue
+    // LOG 12 : Erreur inattendue
     console.error("[/api/generate-quiz] Erreur inattendue :", error);
     res.status(500).json({ 
       error: 'Failed to generate quiz questions',
@@ -222,71 +146,11 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON stri
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    message: 'Server is running',
-    timestamp: new Date().toISOString(),
-    env: {
-      port: PORT,
-      hasDeepSeekKey: !!process.env.DEEPSEEK_API_KEY
-    }
-  });
-});
-
-// Endpoint pour tester l'API DeepSeek
-app.get('/api/test-deepseek', async (req, res) => {
-  try {
-    const response = await axios.post(
-      'https://api.deepseek.com/v1/chat/completions',
-      {
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'user', content: 'Hello, respond with just "API working"' }
-        ],
-        temperature: 0.1
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-        }
-      }
-    );
-    
-    res.json({
-      status: 'success',
-      response: response.data.choices[0].message.content
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: 'error',
-      error: error.response?.data || error.message
-    });
-  }
-});
-
-// Error handling
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  process.exit(0);
-});
-
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-  process.exit(1);
+  res.json({ status: 'ok', message: 'Server is running' });
 });
 
 // Start the server
-const server = app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`API endpoint available at http://localhost:${PORT}/api/generate-quiz`);
-  console.log(`Health check available at http://localhost:${PORT}/api/health`);
-  console.log(`DeepSeek test available at http://localhost:${PORT}/api/test-deepseek`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`DeepSeek API Key configured: ${!!process.env.DEEPSEEK_API_KEY}`);
 });
