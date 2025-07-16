@@ -35,7 +35,7 @@ app.post('/api/generate-quiz', async (req, res) => {
     }
 
     // LOG 3 : Construction du prompt
-    const prompt = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante:${category} concernant la zone géographique ${geographical_sphere} pendant la période historique ${period}. Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+    const prompt = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante:${category} concernant la zone géographique ${geographical_sphere} précisement pendant la période historique ${period} en respectant bien les années visées (ex: pour monde multipolaire à partir de 2022 à aujourd'hui). Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
