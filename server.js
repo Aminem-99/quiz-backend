@@ -35,15 +35,16 @@ app.post('/api/generate-quiz', async (req, res) => {
     }
 
     // LOG 3 : Construction du prompt
-    const prompt = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante:${category} concernant la zone géographique ${geographical_sphere} précisement pendant la période historique ${period} en respectant bien les années visées (ex: pour monde multipolaire à partir de 2022 à aujourd'hui). Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+    const prompt = `Génère 5 questions à choix multiple:${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur précisement sur ${entity} pendant la période historique ${period} en respectant bien les années visées (ex: pour monde multipolaire à partir de 2022 à aujourd'hui). Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "answer": "Option correcte"
+    "explanation": "Explication de la réponse correcte"
   }
 ]
-La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
+La difficulté des questions est ${difficulty}. L'échelle est la suivante: easy tu ne proposes qu'un choix correct, medium tu proposes un peu de choix multipels et hard tu mets des pièges et tu poses beaucoup de question à choix multiple. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
     console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
 
     // LOG 4 : Présence de la clé API
