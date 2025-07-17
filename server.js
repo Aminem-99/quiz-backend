@@ -29,7 +29,7 @@ app.post('/api/generate-quiz', async (req, res) => {
     const { difficulty, category, period, geographical_sphere } = req.body;
 
     // LOG 2 : Vérification des paramètres
-    if (!difficulty || !category || !period || !geographical_sphere) {
+    if (!difficulty || !category || !period || !geographical_sphere || !entity) {
       console.error("[/api/generate-quiz] Paramètres manquants !");
       return res.status(400).json({ error: 'Missing required parameters' });
     }
