@@ -29,9 +29,11 @@ app.post('/api/generate-quiz', async (req, res) => {
     const { difficulty, category, period, geographical_sphere, entity, moment } = req.body;
 
     // LOG 2 : Vérification des paramètres
-    if (!difficulty || !category || !period || !geographical_sphere || !entity || !moment) {
-      console.error("[/api/generate-quiz] Paramètres manquants !");
-      return res.status(400).json({ error: 'Missing required parameters' });
+ if (!difficulty || !category || !period || !geographical_sphere || !entity) {
+  console.error("[/api/generate-quiz] Paramètres principaux manquants !");
+  return res.status(400).json({ error: 'Missing required parameters' });
+}
+// moment est optionnel pour le mode libre
     }
 
     // LOG 3 : Construction du prompt
