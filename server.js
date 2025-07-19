@@ -35,16 +35,16 @@ app.post('/api/generate-quiz', async (req, res) => {
     }
 
     // LOG 3 : Construction du prompt
-    const prompt = `Génère 5 questions à choix multiple:${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur précisement sur ${entity} pendant la période historique ${period} (${moment})en respectant bien les années visées (ex: pour monde multipolaire à partir de 2022 à aujourd'hui). Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+    const prompt = `Génère exactement 5 questions à choix multiple sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} pendant la période historique ${period} (${moment}) en respectant strictement les années visées (ex: pour monde multipolaire, de 2022 à aujourd'hui). Chaque question doit avoir exactement 4 propositions de réponse distinctes et indiquer la bonne réponse. Retourne UNIQUEMENT le JSON suivant, sans aucun texte supplémentaire, sans markdown (pas de \`\`\`json ou autre), sans explications hors du JSON, et sans aucun autre contenu :
 [
   {
     "question": "Texte de la question",
     "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": "Option correcte"
+    "answer": "Option correcte",
     "explanation": "Explication de la réponse correcte"
   }
 ]
-La difficulté des questions est ${difficulty}. L'échelle est la suivante: easy tu ne proposes qu'un choix correct, medium tu proposes un peu de choix multipels et hard tu mets des pièges et tu poses beaucoup de question à choix multiple. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
+La difficulté des questions est ${difficulty}. L'échelle est la suivante : easy (un seul choix correct évident), medium (quelques choix multiples avec des options plausibles), hard (pièges et questions complexes à choix multiple). Assure-toi que chaque objet dans le tableau contient exactement les champs "question", "options" (un tableau de 4 chaînes), "answer" (une des options), et "explanation" (une explication claire).`;
     console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
 
     // LOG 4 : Présence de la clé API
@@ -87,6 +87,13 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante: easy
 
     // LOG 8 : Extraction du contenu
     const content = response.data.choices?.[0]?.message?.content;
+    if (!content) {
+      console.error("[/api/generate-quiz] Contenu vide ou structure inattendue :", response.data);
+      return res.status(500).json({ 
+        error: 'Empty or invalid API response',
+        details: 'No content found in API response'
+      });
+    }
     console.log("[/api/generate-quiz] Contenu reçu :", content);
 
     let questions;
@@ -97,7 +104,15 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante: easy
     } catch (parseError) {
       // LOG 10 : Parsing échoué, tentative d'extraction
       console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative d'extraction du JSON du texte...");
-      const jsonMatch = content && content.match(/\[[\s\S]*\]/);
+      
+      // Clean up markdown and extra text
+      let cleanedContent = content
+        .replace(/```json\n?/, '') // Remove opening ```json
+        .replace(/\n?```/, '')     // Remove closing ```
+        .trim();                   // Remove leading/trailing whitespace
+
+      // Extract JSON array
+      const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
       if (jsonMatch) {
         try {
           questions = JSON.parse(jsonMatch[0]);
@@ -110,10 +125,45 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante: easy
           });
         }
       } else {
-        console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte.");
+        console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
         return res.status(500).json({ 
           error: 'Failed to parse API response',
           details: parseError.message
+        });
+      }
+    }
+
+    // LOG 10.1 : Validate JSON structure
+    if (!Array.isArray(questions)) {
+      console.error("[/api/generate-quiz] La réponse n'est pas un tableau :", questions);
+      return res.status(500).json({ 
+        error: 'Invalid API response format',
+        details: 'Response is not an array'
+      });
+    }
+
+    if (questions.length !== 5) {
+      console.error("[/api/generate-quiz] Nombre incorrect de questions :", questions.length);
+      return res.status(500).json({ 
+        error: 'Invalid number of questions',
+        details: `Expected 5 questions, received ${questions.length}`
+      });
+    }
+
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      if (!q.question || !Array.isArray(q.options) || q.options.length !== 4 || !q.answer || !q.explanation) {
+        console.error("[/api/generate-quiz] Question invalide à l'index", i, ":", q);
+        return res.status(500).json({ 
+          error: 'Invalid question structure',
+          details: `Question at index ${i} is missing required fields or has invalid options`
+        });
+      }
+      if (!q.options.includes(q.answer)) {
+        console.error("[/api/generate-quiz] Réponse invalide à l'index", i, ":", q.answer);
+        return res.status(500).json({ 
+          error: 'Invalid answer',
+          details: `Answer at index ${i} does not match any option`
         });
       }
     }
