@@ -48,8 +48,8 @@ app.post('/api/generate-quiz', async (req, res) => {
     const prompt = `Génère exactement 5 questions d'histoire sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} ${contextString}.
 - Chaque question doit avoir exactement 4 propositions de réponse distinctes.
 - Selon la difficulté : 
-   - easy : la plupart des questions n'ont qu'1 seule bonne réponse ("multi": false, "answer": ["Option A"])
-   - medium : mélange questions à 1 ou plusieurs bonnes réponses ("multi": true ou false)
+   - easy : toutes les questions n'ont qu'1 seule bonne réponse ("multi": false, "answer": ["Option A"])
+   - medium : 1 question peut avoir plus d'une bonne réponse ("multi": true, et "answer": tableau de plusieurs options)
    - hard : plusieurs questions doivent avoir 2, 3 ou même 4 bonnes réponses ("multi": true, et "answer": tableau de plusieurs options)
 - Pour chaque question indique la/les bonne(s) réponse(s) dans le champ "answer" (toujours un tableau, même pour une seule bonne réponse).
 - Ajoute aussi un champ "multi" (boolean) pour indiquer si c'est une question à choix multiple ou non.
