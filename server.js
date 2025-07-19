@@ -26,18 +26,26 @@ app.post('/api/generate-quiz', async (req, res) => {
     // LOG 1 : Paramètres reçus
     console.log("[/api/generate-quiz] Paramètres reçus :", req.body);
 
-    const { difficulty, category, period, geographical_sphere, entity, moment } = req.body;
+    // Récupérer tous les paramètres possibles
+    const { difficulty, category, period, episode, moment, geographical_sphere, entity } = req.body;
 
-    // LOG 2 : Vérification des paramètres
- if (!difficulty || !category || !period || !geographical_sphere || !entity) {
-  console.error("[/api/generate-quiz] Paramètres principaux manquants !");
-  return res.status(400).json({ error: 'Missing required parameters' });
-}
-// moment est optionnel pour le mode libre
+    // LOG 2 : Vérification des paramètres principaux (les seuls vraiment obligatoires)
+    if (!difficulty || !category || !period || !geographical_sphere || !entity) {
+      console.error("[/api/generate-quiz] Paramètres principaux manquants !");
+      return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    // LOG 3 : Construction du prompt
-    const prompt = `Génère exactement 5 questions à choix multiple sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} pendant la période historique ${period} (${moment}) en respectant strictement les années visées (ex: pour monde multipolaire, de 2022 à aujourd'hui). Chaque question doit avoir exactement 4 propositions de réponse distinctes et indiquer la bonne réponse. Retourne UNIQUEMENT le JSON suivant, sans aucun texte supplémentaire, sans markdown (pas de \`\`\`json ou autre), sans explications hors du JSON, et sans aucun autre contenu :
+    // Construire la description du contexte historique selon les paramètres reçus
+    let contextString = `pendant la période historique ${period}`;
+    if (episode && episode.trim().length > 0) {
+      contextString += `, épisode "${episode}"`;
+    }
+    if (moment && moment.trim().length > 0) {
+      contextString += ` (moment : ${moment})`;
+    }
+
+    // Construction du prompt dynamique, compatible tous cas (mode libre/parcours, épisode ou non, moment ou non)
+    const prompt = `Génère exactement 5 questions à choix multiple sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} ${contextString}. Chaque question doit avoir exactement 4 propositions de réponse distinctes et indiquer la bonne réponse. Retourne UNIQUEMENT le JSON suivant, sans aucun texte supplémentaire, sans markdown (pas de \`\`\`json ou autre), sans explications hors du JSON, et sans aucun autre contenu :
 [
   {
     "question": "Texte de la question",
@@ -47,12 +55,13 @@ app.post('/api/generate-quiz', async (req, res) => {
   }
 ]
 La difficulté des questions est ${difficulty}. L'échelle est la suivante : easy (un seul choix correct évident), medium (quelques choix multiples avec des options plausibles), hard (pièges et questions complexes à choix multiple). Assure-toi que chaque objet dans le tableau contient exactement les champs "question", "options" (un tableau de 4 chaînes), "answer" (une des options), et "explanation" (une explication claire).`;
+
     console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
 
-    // LOG 4 : Présence de la clé API
+    // LOG 3 : Présence de la clé API
     console.log("[/api/generate-quiz] Clé API présente :", !!process.env.DEEPSEEK_API_KEY);
 
-    // LOG 5 : Payload DeepSeek
+    // LOG 4 : Payload DeepSeek
     const payload = {
       model: 'deepseek-chat',
       messages: [
@@ -63,7 +72,7 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
     };
     console.log("[/api/generate-quiz] Payload DeepSeek :", JSON.stringify(payload));
 
-    // LOG 6 : Appel à l'API DeepSeek
+    // LOG 5 : Appel à l'API DeepSeek
     let response;
     try {
       response = await axios.post(
@@ -79,7 +88,7 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
       console.log("[/api/generate-quiz] Status code DeepSeek :", response.status);
       console.log("[/api/generate-quiz] Réponse brute DeepSeek :", response.data);
     } catch (apiError) {
-      // LOG 7 : Erreur lors de l'appel à DeepSeek
+      // LOG 6 : Erreur lors de l'appel à DeepSeek
       console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :", apiError.response ? apiError.response.data : apiError.message);
       return res.status(500).json({ 
         error: 'Erreur lors de l\'appel à DeepSeek',
@@ -87,7 +96,7 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
       });
     }
 
-    // LOG 8 : Extraction du contenu
+    // LOG 7 : Extraction du contenu
     const content = response.data.choices?.[0]?.message?.content;
     if (!content) {
       console.error("[/api/generate-quiz] Contenu vide ou structure inattendue :", response.data);
@@ -100,13 +109,13 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
 
     let questions;
     try {
-      // LOG 9 : Parsing JSON
+      // LOG 8 : Parsing JSON
       questions = JSON.parse(content);
       console.log("[/api/generate-quiz] Parsing JSON réussi !");
     } catch (parseError) {
-      // LOG 10 : Parsing échoué, tentative d'extraction
+      // LOG 9 : Parsing échoué, tentative d'extraction
       console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative d'extraction du JSON du texte...");
-      
+
       // Clean up markdown and extra text
       let cleanedContent = content
         .replace(/```json\n?/, '') // Remove opening ```json
@@ -135,7 +144,7 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
       }
     }
 
-    // LOG 10.1 : Validate JSON structure
+    // LOG 10 : Validate JSON structure
     if (!Array.isArray(questions)) {
       console.error("[/api/generate-quiz] La réponse n'est pas un tableau :", questions);
       return res.status(500).json({ 
