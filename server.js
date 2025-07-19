@@ -107,5 +107,107 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
       
       // Clean up markdown and extra text
       let cleanedContent = content
-        .replace(/```json\n?/, '') // Remove opening ```json:disable-run
-        .replace(/\
+        .replace(/```json\n?/, '') // Remove opening ```json
+        .replace(/\n?```/, '')     // Remove closing ```
+        .trim();                   // Remove leading/trailing whitespace
+
+      // Extract JSON array
+      const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          questions = JSON.parse(jsonMatch[0]);
+          console.log("[/api/generate-quiz] Extraction JSON réussie !");
+        } catch (extractError) {
+          console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
+          return res.status(500).json({ 
+            error: 'Failed to parse API response (extraction)',
+            details: extractError.message
+          });
+        }
+      } else {
+        console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
+        return res.status(500).json({ 
+          error: 'Failed to parse API response',
+          details: parseError.message
+        });
+      }
+    }
+
+    // LOG 10.1 : Validate JSON structure
+    if (!Array.isArray(questions)) {
+      console.error("[/api/generate-quiz] La réponse n'est pas un tableau :", questions);
+      return res.status(500).json({ 
+        error: 'Invalid API response format',
+        details: 'Response is not an array'
+      });
+    }
+
+    if (questions.length !== 5) {
+      console.error("[/api/generate-quiz] Nombre incorrect de questions :", questions.length);
+      return res.status(500).json({ 
+        error: 'Invalid number of questions',
+        details: `Expected 5 questions, received ${questions.length}`
+      });
+    }
+
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      if (!q.question || !Array.isArray(q.options) || q.options.length !== 4 || !q.answer || !q.explanation) {
+        console.error("[/api/generate-quiz] Question invalide à l'index", i, ":", q);
+        return res.status(500).json({ 
+          error: 'Invalid question structure',
+          details: `Question at index ${i} is missing required fields or has invalid options`
+        });
+      }
+      if (!q.options.includes(q.answer)) {
+        console.error("[/api/generate-quiz] Réponse invalide à l'index", i, ":", q.answer);
+        return res.status(500).json({ 
+          error: 'Invalid answer',
+          details: `Answer at index ${i} does not match any option`
+        });
+      }
+    }
+
+    // LOG 11 : Succès final
+    console.log("[/api/generate-quiz] Quiz généré avec succès !");
+    res.json(questions);
+
+  } catch (error) {
+    // LOG 12 : Erreur inattendue
+    console.error("[/api/generate-quiz] Erreur inattendue :", error);
+    res.status(500).json({ 
+      error: 'Failed to generate quiz questions',
+      details: error.message
+    });
+  }
+});
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  console.log("[/api/health] Health check requested");
+  res.json({ status: 'ok', message: 'Server is running' });
+});
+
+// Handle SIGTERM gracefully
+process.on('SIGTERM', () => {
+  console.log('Received SIGTERM. Performing graceful shutdown...');
+  server.close(() => {
+    console.log('Server closed. Exiting process.');
+    process.exit(0);
+  });
+});
+
+// Handle SIGINT (Ctrl+C)
+process.on('SIGINT', () => {
+  console.log('Received SIGINT. Performing graceful shutdown...');
+  server.close(() => {
+    console.log('Server closed. Exiting process.');
+    process.exit(0);
+  });
+});
+
+// Start the server
+const server = app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`API endpoint available at http://localhost:${PORT}/api/generate-quiz`);
+});
