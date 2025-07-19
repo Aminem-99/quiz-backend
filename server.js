@@ -44,17 +44,26 @@ app.post('/api/generate-quiz', async (req, res) => {
       contextString += ` (moment : ${moment})`;
     }
 
-    // Construction du prompt dynamique, compatible tous cas (mode libre/parcours, épisode ou non, moment ou non)
-    const prompt = `Génère exactement 5 questions à choix multiple sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} ${contextString}. Chaque question doit avoir exactement 4 propositions de réponse distinctes et indiquer la bonne réponse. Retourne UNIQUEMENT le JSON suivant, sans aucun texte supplémentaire, sans markdown (pas de \`\`\`json ou autre), sans explications hors du JSON, et sans aucun autre contenu :
+    // Construction du prompt dynamique, compatible choix multiples
+    const prompt = `Génère exactement 5 questions d'histoire sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} ${contextString}.
+- Chaque question doit avoir exactement 4 propositions de réponse distinctes.
+- Selon la difficulté : 
+   - easy : la plupart des questions n'ont qu'1 seule bonne réponse ("multi": false, "answer": ["Option A"])
+   - medium : mélange questions à 1 ou plusieurs bonnes réponses ("multi": true ou false)
+   - hard : plusieurs questions doivent avoir 2, 3 ou même 4 bonnes réponses ("multi": true, et "answer": tableau de plusieurs options)
+- Pour chaque question indique la/les bonne(s) réponse(s) dans le champ "answer" (toujours un tableau, même pour une seule bonne réponse).
+- Ajoute aussi un champ "multi" (boolean) pour indiquer si c'est une question à choix multiple ou non.
+- Retourne strictement le JSON suivant (pas de markdown, pas d'explications hors du JSON) :
 [
   {
     "question": "Texte de la question",
     "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": "Option correcte",
-    "explanation": "Explication de la réponse correcte"
+    "answer": ["Option correcte", "Option correcte 2"], // tableau, même pour 1 bonne réponse
+    "multi": true,
+    "explanation": "Explication de la/les bonne(s) réponse(s)."
   }
 ]
-La difficulté des questions est ${difficulty}. L'échelle est la suivante : easy (un seul choix correct évident), medium (quelques choix multiples avec des options plausibles), hard (pièges et questions complexes à choix multiple). Assure-toi que chaque objet dans le tableau contient exactement les champs "question", "options" (un tableau de 4 chaînes), "answer" (une des options), et "explanation" (une explication claire).`;
+La difficulté des questions est ${difficulty}.`;
 
     console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
 
@@ -163,19 +172,30 @@ La difficulté des questions est ${difficulty}. L'échelle est la suivante : eas
 
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
-      if (!q.question || !Array.isArray(q.options) || q.options.length !== 4 || !q.answer || !q.explanation) {
+      if (
+        !q.question ||
+        !Array.isArray(q.options) ||
+        q.options.length !== 4 ||
+        !Array.isArray(q.answer) ||
+        q.answer.length < 1 ||
+        typeof q.multi !== 'boolean' ||
+        !q.explanation
+      ) {
         console.error("[/api/generate-quiz] Question invalide à l'index", i, ":", q);
         return res.status(500).json({ 
           error: 'Invalid question structure',
           details: `Question at index ${i} is missing required fields or has invalid options`
         });
       }
-      if (!q.options.includes(q.answer)) {
-        console.error("[/api/generate-quiz] Réponse invalide à l'index", i, ":", q.answer);
-        return res.status(500).json({ 
-          error: 'Invalid answer',
-          details: `Answer at index ${i} does not match any option`
-        });
+      // Vérifier que toutes les réponses sont bien présentes dans les options
+      for (const ans of q.answer) {
+        if (!q.options.includes(ans)) {
+          console.error("[/api/generate-quiz] Réponse invalide à l'index", i, ":", ans);
+          return res.status(500).json({ 
+            error: 'Invalid answer',
+            details: `Answer "${ans}" at index ${i} does not match any option`
+          });
+        }
       }
     }
 
