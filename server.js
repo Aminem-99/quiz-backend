@@ -4,31 +4,35 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-// Ajout : import jsonrepair
-import { jsonrepair } from 'jsonrepair';
+
+// Tentative d'importation de jsonrepair (gestion de l'absence du module)
+let jsonrepair = undefined;
+try {
+  // Dynamically import for ESM support
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  jsonrepair = (await import('jsonrepair')).jsonrepair;
+  console.log('[INIT] Module jsonrepair chargé avec succès !');
+} catch (e) {
+  console.warn('[INIT] Module jsonrepair non trouvé. Le backend fonctionnera mais sera moins robuste au JSON mal formé. Installez-le avec : npm install jsonrepair');
+}
 
 // Load environment variables
 dotenv.config();
 
-// Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Configure middleware
 app.use(cors());
 app.use(express.json());
 
-// Get current file directory (ESM equivalent of __dirname)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Quiz generation endpoint
 app.post('/api/generate-quiz', async (req, res) => {
   try {
     console.log("[/api/generate-quiz] Paramètres reçus :", req.body);
 
     const { difficulty, category, period, episode, moment, geographical_sphere, entity } = req.body;
-
     if (!difficulty || !category || !period || !geographical_sphere || !entity) {
       console.error("[/api/generate-quiz] Paramètres principaux manquants !");
       return res.status(400).json({ error: 'Missing required parameters' });
@@ -63,8 +67,6 @@ app.post('/api/generate-quiz', async (req, res) => {
 La difficulté des questions est ${difficulty}.`;
 
     console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
-
-    console.log("[/api/generate-quiz] Clé API présente :", !!process.env.DEEPSEEK_API_KEY);
 
     const payload = {
       model: 'deepseek-chat',
@@ -114,19 +116,48 @@ La difficulté des questions est ${difficulty}.`;
       questions = JSON.parse(content);
       console.log("[/api/generate-quiz] Parsing JSON réussi !");
     } catch (parseError) {
-      // 2e tentative : jsonrepair
-      console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative de réparation avec jsonrepair...");
-      try {
-        questions = JSON.parse(jsonrepair(content));
-        console.log("[/api/generate-quiz] JSON réparé et parsé avec succès !");
-      } catch (repairError) {
-        // 3e tentative : extraction regex fallback
-        console.warn("[/api/generate-quiz] Réparation échouée, tentative d'extraction du JSON du texte...");
+      // 2e tentative : jsonrepair si dispo
+      if (jsonrepair) {
+        try {
+          console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative de réparation avec jsonrepair...");
+          questions = JSON.parse(jsonrepair(content));
+          console.log("[/api/generate-quiz] JSON réparé et parsé avec succès !");
+        } catch (repairError) {
+          // 3e tentative : extraction regex fallback
+          console.warn("[/api/generate-quiz] Réparation échouée, tentative d'extraction du JSON du texte...");
+          let cleanedContent = content
+            .replace(/```json\n?/, '')
+            .replace(/\n?```/, '')
+            .trim();
+          const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
+          if (jsonMatch) {
+            try {
+              questions = JSON.parse(jsonMatch[0]);
+              console.log("[/api/generate-quiz] Extraction JSON réussie !");
+            } catch (extractError) {
+              console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
+              return res.status(500).json({ 
+                error: 'Failed to parse API response (extraction)',
+                details: extractError.message,
+                raw: content
+              });
+            }
+          } else {
+            console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
+            return res.status(500).json({ 
+              error: 'Failed to parse API response',
+              details: repairError.message,
+              raw: content
+            });
+          }
+        }
+      } else {
+        // Si pas de jsonrepair, fallback direct
+        console.warn("[/api/generate-quiz] Parsing JSON échoué et jsonrepair non disponible, tentative extraction regex...");
         let cleanedContent = content
-          .replace(/```json\n?/, '') // Remove opening ```json
-          .replace(/\n?```/, '')     // Remove closing ```
+          .replace(/```json\n?/, '')
+          .replace(/\n?```/, '')
           .trim();
-
         const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           try {
@@ -144,7 +175,7 @@ La difficulté des questions est ${difficulty}.`;
           console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
           return res.status(500).json({ 
             error: 'Failed to parse API response',
-            details: repairError.message,
+            details: parseError.message,
             raw: content
           });
         }
@@ -208,13 +239,11 @@ La difficulté des questions est ${difficulty}.`;
   }
 });
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
   console.log("[/api/health] Health check requested");
   res.json({ status: 'ok', message: 'Server is running' });
 });
 
-// Handle SIGTERM gracefully
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM. Performing graceful shutdown...');
   server.close(() => {
@@ -223,7 +252,6 @@ process.on('SIGTERM', () => {
   });
 });
 
-// Handle SIGINT (Ctrl+C)
 process.on('SIGINT', () => {
   console.log('Received SIGINT. Performing graceful shutdown...');
   server.close(() => {
@@ -232,7 +260,6 @@ process.on('SIGINT', () => {
   });
 });
 
-// Start the server
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`API endpoint available at http://localhost:${PORT}/api/generate-quiz`);
