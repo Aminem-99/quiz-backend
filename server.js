@@ -44,8 +44,8 @@ app.post('/api/generate-quiz', async (req, res) => {
     let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
     let contexte = "";
 
-    if (id_name) {
-      contexte += `concernant le sujet/événement identifié par "${id_name}" `;
+    if (ID_Name) {
+      contexte += `concernant le sujet/événement identifié par "${ID_Name}" `;
       // On ne met PAS la zone géographique si id_name présent
     } else if (geographical_sphere) {
       contexte += `concernant la zone géographique ${geographical_sphere} `;
