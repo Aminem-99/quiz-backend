@@ -76,21 +76,22 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       questions = JSON.parse(content);
     } catch (parseErr) {
       // LOG: Parsing JSON brut échoué
-      console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
-      const jsonMatch = content && content.match(/\[[\s\S]*?\]/);
-      if (jsonMatch) {
-        try {
-          questions = JSON.parse(jsonMatch[0]);
-        } catch (parseErr2) {
-          // LOG: Parsing bloc JSON échoué
-          console.error('[generate-quiz] Parsing bloc JSON échoué:', parseErr2.message);
-          return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
-        }
-      } else {
-        // LOG: Aucun bloc JSON trouvé
-        console.error('[generate-quiz] Aucun bloc JSON extrait de:', content);
-        return res.status(500).json({ error: 'Failed to parse API response', details: content });
-      }
+   console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
+
+    // Nettoyage des balises markdown ```json ... ```
+    let cleanedContent = content.trim();
+
+    if (cleanedContent.startsWith('```')) {
+      // Supprime toutes les balises ```json ou ```
+      cleanedContent = cleanedContent.replace(/```json|```/g, '').trim();
+    }
+
+    try {
+      questions = JSON.parse(cleanedContent);
+    } catch (parseErr2) {
+      // LOG: Parsing JSON échoué après nettoyage
+      console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
+      return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
     }
 
     // LOG: Quiz généré
