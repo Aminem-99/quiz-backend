@@ -143,22 +143,27 @@ app.post('/api/submit-answers', async (req, res) => {
   const score = correct_answers;
 
   // Insérer score dans quiz_scores
-  const { data, error } = await supabase
-    .from('quiz_scores')
-    .insert([{
-      console.log('[submit-answers] Payload:', {
-      user_id,
-      score,
-      difficulty,
-      category,
-      period,
-      geographical_sphere,
-      total_questions,
-      time_taken,
-      correct_answers
-      });
-    }])
-    .select();
+// Prépare l'objet à insérer
+const payload = {
+  user_id,
+  score,
+  difficulty,
+  category,
+  period,
+  geographical_sphere,
+  total_questions,
+  time_taken,
+  correct_answers
+};
+
+// Log le payload pour debug
+console.log('[submit-answers] Payload:', payload);
+
+// Insertion dans Supabase
+const { data, error } = await supabase
+  .from('quiz_scores')
+  .insert([payload])
+  .select();
 
   if (error) {
     // LOG: Erreur Supabase
