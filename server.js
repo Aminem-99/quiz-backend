@@ -4,6 +4,7 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { jsonrepair } from 'jsonrepair'; // Added import for jsonrepair
 
 // Load environment variables
 dotenv.config();
@@ -111,45 +112,54 @@ La difficulté des questions est ${difficulty}.`;
       console.error("[/api/generate-quiz] Contenu vide ou structure inattendue :", response.data);
       return res.status(500).json({ 
         error: 'Empty or invalid API response',
-        details: 'No content found in API response'
+        details: 'No content found in API response',
+        raw: JSON.stringify(response.data) // Include raw response for debugging
       });
     }
-    console.log("[/api/generate-quiz] Contenu reçu :", content);
+    console.log("[/api/generate-quiz] Contenu brut reçu :", content); // Log raw AI response
 
     let questions;
     try {
-      // LOG 8 : Parsing JSON
+      // Try parsing the content directly
       questions = JSON.parse(content);
       console.log("[/api/generate-quiz] Parsing JSON réussi !");
     } catch (parseError) {
-      // LOG 9 : Parsing échoué, tentative d'extraction
-      console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative d'extraction du JSON du texte...");
+      // LOG 8 : Parsing failed, attempt to repair JSON
+      console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative de réparation du JSON...");
+      try {
+        // Attempt to repair JSON using jsonrepair
+        const repairedJson = jsonrepair(content);
+        questions = JSON.parse(repairedJson);
+        console.log("[/api/generate-quiz] JSON réparé et parsé avec succès !");
+      } catch (repairError) {
+        // Fallback to regex-based extraction
+        console.warn("[/api/generate-quiz] Réparation JSON échouée, tentative d'extraction avec regex...");
+        let cleanedContent = content
+          .replace(/```json\n?/, '') // Remove opening ```json
+          .replace(/\n?```/, '')     // Remove closing ```
+          .trim();                   // Remove leading/trailing whitespace
 
-      // Clean up markdown and extra text
-      let cleanedContent = content
-        .replace(/```json\n?/, '') // Remove opening ```json
-        .replace(/\n?```/, '')     // Remove closing ```
-        .trim();                   // Remove leading/trailing whitespace
-
-      // Extract JSON array
-      const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        try {
-          questions = JSON.parse(jsonMatch[0]);
-          console.log("[/api/generate-quiz] Extraction JSON réussie !");
-        } catch (extractError) {
-          console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
+        const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          try {
+            questions = JSON.parse(jsonMatch[0]);
+            console.log("[/api/generate-quiz] Extraction JSON réussie !");
+          } catch (extractError) {
+            console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
+            return res.status(500).json({ 
+              error: 'Failed to parse API response (extraction)',
+              details: extractError.message,
+              raw: content // Return raw content for debugging
+            });
+          }
+        } else {
+          console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
           return res.status(500).json({ 
-            error: 'Failed to parse API response (extraction)',
-            details: extractError.message
+            error: 'Failed to parse API response',
+            details: parseError.message,
+            raw: content // Return raw content for debugging
           });
         }
-      } else {
-        console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
-        return res.status(500).json({ 
-          error: 'Failed to parse API response',
-          details: parseError.message
-        });
       }
     }
 
@@ -158,7 +168,8 @@ La difficulté des questions est ${difficulty}.`;
       console.error("[/api/generate-quiz] La réponse n'est pas un tableau :", questions);
       return res.status(500).json({ 
         error: 'Invalid API response format',
-        details: 'Response is not an array'
+        details: 'Response is not an array',
+        raw: content // Include raw content for debugging
       });
     }
 
@@ -166,7 +177,8 @@ La difficulté des questions est ${difficulty}.`;
       console.error("[/api/generate-quiz] Nombre incorrect de questions :", questions.length);
       return res.status(500).json({ 
         error: 'Invalid number of questions',
-        details: `Expected 5 questions, received ${questions.length}`
+        details: `Expected 5 questions, received ${questions.length}`,
+        raw: content // Include raw content for debugging
       });
     }
 
@@ -184,7 +196,8 @@ La difficulté des questions est ${difficulty}.`;
         console.error("[/api/generate-quiz] Question invalide à l'index", i, ":", q);
         return res.status(500).json({ 
           error: 'Invalid question structure',
-          details: `Question at index ${i} is missing required fields or has invalid options`
+          details: `Question at index ${i} is missing required fields or has invalid options`,
+          raw: content // Include raw content for debugging
         });
       }
       // Vérifier que toutes les réponses sont bien présentes dans les options
@@ -193,7 +206,8 @@ La difficulté des questions est ${difficulty}.`;
           console.error("[/api/generate-quiz] Réponse invalide à l'index", i, ":", ans);
           return res.status(500).json({ 
             error: 'Invalid answer',
-            details: `Answer "${ans}" at index ${i} does not match any option`
+            details: `Answer "${ans}" at index ${i} does not match any option`,
+            raw: content // Include raw content for debugging
           });
         }
       }
@@ -208,7 +222,8 @@ La difficulté des questions est ${difficulty}.`;
     console.error("[/api/generate-quiz] Erreur inattendue :", error);
     res.status(500).json({ 
       error: 'Failed to generate quiz questions',
-      details: error.message
+      details: error.message,
+      raw: content || 'No content available' // Include raw content if available
     });
   }
 });
