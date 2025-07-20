@@ -19,7 +19,7 @@ app.use(cors());
 app.use(express.json());
 
 /**
- * Générer un quiz via DeepSeek (pas de stockage)
+ * Générer un quiz via DeepSeek avec cache
  */
 app.post('/api/generate-quiz', async (req, res) => {
   try {
@@ -28,7 +28,7 @@ app.post('/api/generate-quiz', async (req, res) => {
       category,
       period,
       geographical_sphere,
-      ID_Name,
+      id_name,
       moment,
       episode
     } = req.body;
@@ -36,17 +36,45 @@ app.post('/api/generate-quiz', async (req, res) => {
     // LOG: paramètres reçus
     console.log('[generate-quiz] Payload reçu:', req.body);
 
+    // Vérification des paramètres requis
     if (!difficulty || !category) {
       return res.status(400).json({ error: 'Missing required parameters' });
+    }
+
+    // Recherche tous les quiz existants pour ces paramètres
+    const cacheQuery = supabase
+      .from('quiz_cache')
+      .select('quiz_json')
+      .eq('difficulty', difficulty)
+      .eq('category', category);
+    
+    if (period) cacheQuery.eq('period', period);
+    if (geographical_sphere) cacheQuery.eq('geographical_sphere', geographical_sphere);
+    if (id_name) cacheQuery.eq('id_name', id_name);
+    if (moment) cacheQuery.eq('moment', moment);
+    if (episode) cacheQuery.eq('episode', episode);
+
+    const { data: cachedQuizzes, error: cacheError } = await cacheQuery
+      .order('created_at', { ascending: false });
+
+    if (cacheError) {
+      console.warn('[generate-quiz] Erreur recherche cache quiz:', cacheError.message);
+    }
+
+    if (cachedQuizzes && cachedQuizzes.length >= 5) {
+      // Choisit un quiz au hasard
+      const idx = Math.floor(Math.random() * cachedQuizzes.length);
+      console.log('[generate-quiz] Quiz trouvé en cache (diversité)');
+      return res.json(cachedQuizzes[idx].quiz_json);
     }
 
     // Construction du prompt selon la logique demandée
     let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
     let contexte = "";
 
-    if (ID_Name) {
-      contexte += `concernant l'entité politique "${ID_Name}" `;
-      // On ne met PAS la zone géographique si ID_Name présent
+    if (id_name) {
+      contexte += `concernant le sujet/événement identifié par "${id_name}" `;
+      // On ne met PAS la zone géographique si id_name présent
     } else if (geographical_sphere) {
       contexte += `concernant la zone géographique ${geographical_sphere} `;
     }
@@ -110,23 +138,45 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       // LOG: Parsing JSON brut échoué
       console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
 
+      // Nettoyage des balises markdown ```json ... ```
       let cleanedContent = content.trim();
       if (cleanedContent.startsWith('```')) {
         cleanedContent = cleanedContent.replace(/```json|```/g, '').trim();
       }
+
       try {
         questions = JSON.parse(cleanedContent);
       } catch (parseErr2) {
+        // LOG: Parsing JSON échoué après nettoyage
         console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
         return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
       }
     }
 
     // LOG: Quiz généré
-    console.log('[generate-quiz] Quiz Quiz généré:', questions);
+    console.log('[generate-quiz] Quiz généré:', questions);
+
+    // AJOUT : écriture dans le cache
+    const { error: insertError } = await supabase.from('quiz_cache').insert([{
+      difficulty,
+      category,
+      period,
+      geographical_sphere,
+      id_name,
+      moment,
+      episode,
+      quiz_json: questions
+    }]);
+
+    if (insertError) {
+      console.error('[generate-quiz] Erreur INSERT cache:', insertError.message);
+    } else {
+      console.log('[generate-quiz] Quiz sauvegardé dans quiz_cache.');
+    }
 
     res.json(questions);
   } catch (error) {
+    // LOG: Erreur globale
     console.error('[generate-quiz] Server error:', error);
     res.status(500).json({ error: 'Failed to generate quiz questions', details: error.message });
   }
@@ -187,7 +237,7 @@ app.post('/api/submit-answers', async (req, res) => {
     // Log le payload pour debug
     console.log('[submit-answers] Payload:', payload);
 
-    // Insertion dans promo
+    // Insertion dans Supabase
     const { data, error } = await supabase
       .from('quiz_scores')
       .insert([payload])
@@ -215,7 +265,7 @@ app.post('/api/submit-answers', async (req, res) => {
 });
 
 /**
- * Leaderboard global (Top  10)
+ * Leaderboard global (Top 10)
  */
 app.get('/api/leaderboard', async (req, res) => {
   try {
