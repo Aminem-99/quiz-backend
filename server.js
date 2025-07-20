@@ -29,13 +29,32 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 app.post('/api/generate-quiz', async (req, res) => {
+  let deepseekStream = null;
+  let streamEnded = false;
+
+  // Function to safely end the response
+  const safeEnd = (eventType, data) => {
+    if (!streamEnded) {
+      streamEnded = true;
+      if (eventType && data) {
+        res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
+      }
+      res.end();
+      if (deepseekStream) {
+        deepseekStream.destroy();
+        deepseekStream = null;
+      }
+    }
+  };
+
   try {
     console.log("[/api/generate-quiz] Paramètres reçus :", req.body);
 
     const { difficulty, category, period, episode, moment, geographical_sphere, entity } = req.body;
     if (!difficulty || !category || !period || !geographical_sphere || !entity) {
       console.error("[/api/generate-quiz] Paramètres principaux manquants !");
-      return res.status(400).json({ error: 'Missing required parameters' });
+      safeEnd('error', { error: 'Missing required parameters' });
+      return;
     }
 
     let contextString = `pendant la période historique ${period}`;
@@ -75,7 +94,7 @@ La difficulté des questions est ${difficulty}.`;
         { role: 'user', content: prompt }
       ],
       temperature: 0.7,
-      stream: true // Enable streaming
+      stream: true
     };
     console.log("[/api/generate-quiz] Payload DeepSeek :", JSON.stringify(payload));
 
@@ -84,9 +103,8 @@ La difficulté des questions est ${difficulty}.`;
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    let response;
     try {
-      response = await axios.post(
+      const response = await axios.post(
         'https://api.deepseek.com/v1/chat/completions',
         payload,
         {
@@ -94,35 +112,36 @@ La difficulté des questions est ${difficulty}.`;
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
           },
-          responseType: 'stream' // Set Axios to handle streaming response
+          responseType: 'stream'
         }
       );
       console.log("[/api/generate-quiz] Streaming started from DeepSeek");
+      deepseekStream = response.data;
     } catch (apiError) {
       console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :", apiError.response ? apiError.response.data : apiError.message);
-      res.write('event: error\ndata: ' + JSON.stringify({ 
+      safeEnd('error', { 
         error: 'Erreur lors de l\'appel à DeepSeek',
         details: apiError.response ? apiError.response.data : apiError.message
-      }) + '\n\n');
-      res.end();
+      });
       return;
     }
 
     // Accumulate stream data
     let accumulatedData = '';
 
-    response.data.on('data', (chunk) => {
+    deepseekStream.on('data', (chunk) => {
+      if (streamEnded) return;
+
       const chunkStr = chunk.toString();
       console.log("[/api/generate-quiz] Chunk reçu :", chunkStr);
 
       // Send chunk to client
       res.write(`data: ${chunkStr}\n\n`);
-
-      // Accumulate chunks for final parsing
       accumulatedData += chunkStr;
     });
 
-    response.data.on('end', () => {
+    deepseekStream.on('end', () => {
+      if (streamEnded) return;
       console.log("[/api/generate-quiz] Stream terminé");
 
       // Attempt to parse accumulated data
@@ -198,41 +217,40 @@ La difficulté des questions est ${difficulty}.`;
         }
 
         console.log("[/api/generate-quiz] Quiz validé avec succès !");
-        res.write('event: complete\ndata: ' + JSON.stringify(questions) + '\n\n');
+        safeEnd('complete', questions);
       } catch (error) {
         console.error("[/api/generate-quiz] Erreur lors du traitement final :", error.message);
-        res.write('event: error\ndata: ' + JSON.stringify({ 
+        safeEnd('error', { 
           error: 'Failed to process stream',
           details: error.message,
           raw: accumulatedData
-        }) + '\n\n');
+        });
       }
-      res.end();
     });
 
-    response.data.on('error', (error) => {
+    deepseekStream.on('error', (error) => {
+      if (streamEnded) return;
       console.error("[/api/generate-quiz] Erreur dans le stream :", error);
-      res.write('event: error\ndata: ' + JSON.stringify({ 
+      safeEnd('error', { 
         error: 'Stream error',
         details: error.message
-      }) + '\n\n');
-      res.end();
+      });
     });
 
     // Handle client disconnect
     req.on('close', () => {
+      if (streamEnded) return;
       console.log("[/api/generate-quiz] Client disconnected");
-      response.data.destroy();
-      res.end();
+      safeEnd();
     });
 
   } catch (error) {
+    if (streamEnded) return;
     console.error("[/api/generate-quiz] Erreur inattendue :", error);
-    res.write('event: error\ndata: ' + JSON.stringify({ 
+    safeEnd('error', { 
       error: 'Failed to generate quiz questions',
       details: error.message
-    }) + '\n\n');
-    res.end();
+    });
   }
 });
 
