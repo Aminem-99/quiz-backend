@@ -1,16 +1,15 @@
-
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
 // Tentative d'importation de jsonrepair (gestion de l'absence du module)
 let jsonrepair = undefined;
 try {
-  // Dynamically import for ESM support
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   jsonrepair = (await import('jsonrepair')).jsonrepair;
   console.log('[INIT] Module jsonrepair chargé avec succès !');
 } catch (e) {
@@ -21,10 +20,24 @@ try {
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT;
+if (!PORT) {
+  throw new Error('PORT not set in environment variables!');
+}
 
 app.use(cors());
 app.use(express.json());
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
+// Simplified health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -122,7 +135,7 @@ La difficulté des questions est ${difficulty}.`;
       console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :", apiError.response ? apiError.response.data : apiError.message);
       safeEnd('error', { 
         error: 'Erreur lors de l\'appel à DeepSeek',
-        details: apiError.response ? apiError.response.data : apiError.message
+        detail: apiError.response ? apiError.response.data : apiError.message
       });
       return;
     }
@@ -255,11 +268,6 @@ La difficulté des questions est ${difficulty}.`;
   }
 });
 
-app.get('/api/health', (req, res) => {
-  console.log("[/api/health] Health check requested");
-  res.json({ status: 'ok', message: 'Server is running' });
-});
-
 process.on('SIGTERM', () => {
   console.log('Received SIGTERM. Performing graceful shutdown...');
   server.close(() => {
@@ -276,7 +284,10 @@ process.on('SIGINT', () => {
   });
 });
 
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`API endpoint available at http://localhost:${PORT}/api/generate-quiz`);
+  console.log(`API endpoint available at http://0.0.0.0:${PORT}/api/generate-quiz`);
 });
+
+server.keepAliveTimeout = 60000; // 60s
+server.headersTimeout = 65000; // 65s
