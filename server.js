@@ -28,7 +28,7 @@ app.post('/api/generate-quiz', async (req, res) => {
       category,
       period,
       geographical_sphere,
-      id_name,
+      ID_Name,
       moment,
       episode
     } = req.body;
@@ -50,7 +50,7 @@ app.post('/api/generate-quiz', async (req, res) => {
     
     if (period) cacheQuery.eq('period', period);
     if (geographical_sphere) cacheQuery.eq('geographical_sphere', geographical_sphere);
-    if (id_name) cacheQuery.eq('id_name', id_name);
+    if (ID_Name) cacheQuery.eq('ID_Name', ID_Name);
     if (moment) cacheQuery.eq('moment', moment);
     if (episode) cacheQuery.eq('episode', episode);
 
@@ -72,8 +72,8 @@ app.post('/api/generate-quiz', async (req, res) => {
     let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
     let contexte = "";
 
-    if (id_name) {
-      contexte += `concernant le sujet/événement identifié par "${id_name}" `;
+    if (ID_Name) {
+      contexte += `concernant le sujet/événement identifié par "${ID_Name}" `;
       // On ne met PAS la zone géographique si id_name présent
     } else if (geographical_sphere) {
       contexte += `concernant la zone géographique ${geographical_sphere} `;
@@ -162,7 +162,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       category,
       period,
       geographical_sphere,
-      id_name,
+      ID_Name,
       moment,
       episode,
       quiz_json: questions
