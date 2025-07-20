@@ -2,104 +2,46 @@ import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import dotenv from 'dotenv';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
+import { createClient } from '@supabase/supabase-js';
 
-// Tentative d'importation de jsonrepair (gestion de l'absence du module)
-let jsonrepair = undefined;
-try {
-  jsonrepair = (await import('jsonrepair')).jsonrepair;
-  console.log('[INIT] Module jsonrepair chargé avec succès !');
-} catch (e) {
-  console.warn('[INIT] Module jsonrepair non trouvé. Le backend fonctionnera mais sera moins robuste au JSON mal formé. Installez-le avec : npm install jsonrepair');
-}
-
-// Load environment variables
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT;
-if (!PORT) {
-  throw new Error('PORT not set in environment variables!');
-}
+const PORT = process.env.PORT || 3001;
+
+// Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 app.use(cors());
 app.use(express.json());
 
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
-  next();
-});
-
-// Simplified health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).send('OK');
-});
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
+/**
+ * Générer un quiz via DeepSeek (pas de stockage)
+ */
 app.post('/api/generate-quiz', async (req, res) => {
-  let deepseekStream = null;
-  let streamEnded = false;
-
-  // Function to safely end the response
-  const safeEnd = (eventType, data) => {
-    if (!streamEnded) {
-      streamEnded = true;
-      if (eventType && data) {
-        res.write(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`);
-      }
-      res.end();
-      if (deepseekStream) {
-        deepseekStream.destroy();
-        deepseekStream = null;
-      }
-    }
-  };
-
   try {
-    console.log("[/api/generate-quiz] Paramètres reçus :", req.body);
+    const { difficulty, category, period, geographical_sphere } = req.body;
 
-    const { difficulty, category, period, episode, moment, geographical_sphere, entity } = req.body;
-    if (!difficulty || !category || !period || !geographical_sphere || !entity) {
-      console.error("[/api/generate-quiz] Paramètres principaux manquants !");
-      safeEnd('error', { error: 'Missing required parameters' });
-      return;
+    // LOG: paramètres reçus
+    console.log('[generate-quiz] Payload reçu:', req.body);
+
+    if (!difficulty || !category || !period || !geographical_sphere) {
+      return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    let contextString = `pendant la période historique ${period}`;
-    if (episode && episode.trim().length > 0) {
-      contextString += `, épisode "${episode}"`;
-    }
-    if (moment && moment.trim().length > 0) {
-      contextString += ` (moment : ${moment})`;
-    }
-
-    const prompt = `Génère exactement 5 questions d'histoire sur ${category} concernant la zone géographique ${geographical_sphere} et plus précisément sur ${entity} ${contextString}.
-- Chaque question doit avoir exactement 4 propositions de réponse distinctes.
-- Selon la difficulté : 
-   - easy : toutes les questions n'ont qu'1 seule bonne réponse ("multi": false, "answer": ["Option A"])
-   - medium : 1 question peut avoir plus d'une bonne réponse ("multi": true, et "answer": tableau de plusieurs options)
-   - hard : plusieurs questions doivent avoir 2, 3 ou même 4 bonnes réponses ("multi": true, et "answer": tableau de plusieurs options)
-- Pour chaque question indique la/les bonne(s) réponse(s) dans le champ "answer" (toujours un tableau, même pour une seule bonne réponse).
-- Ajoute aussi un champ "multi" (boolean) pour indiquer si c'est une question à choix multiple ou non.
-- Retourne strictement le JSON suivant (pas de markdown, pas d'explications hors du JSON) :
+    const prompt = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante:${category} concernant la zone géographique ${geographical_sphere} pendant la période historique ${period}. Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
     "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": ["Option correcte", "Option correcte 2"], // tableau, même pour 1 bonne réponse
-    "multi": true,
-    "explanation": "Explication de la/les bonne(s) réponse(s)."
+    "answer": "Option correcte",
+    "explanation": "Explication de la bonne réponse"
   }
 ]
-La difficulté des questions est ${difficulty}.`;
-
-    console.log("[/api/generate-quiz] Prompt envoyé :", prompt);
+La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
 
     const payload = {
       model: 'deepseek-chat',
@@ -107,187 +49,162 @@ La difficulté des questions est ${difficulty}.`;
         { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.7,
-      stream: true
+      temperature: 0.7
     };
-    console.log("[/api/generate-quiz] Payload DeepSeek :", JSON.stringify(payload));
 
-    // Set headers for Server-Sent Events
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
+    let response;
     try {
-      const response = await axios.post(
+      response = await axios.post(
         'https://api.deepseek.com/v1/chat/completions',
         payload,
         {
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-          },
-          responseType: 'stream'
+          }
         }
       );
-      console.log("[/api/generate-quiz] Streaming started from DeepSeek");
-      deepseekStream = response.data;
-    } catch (apiError) {
-      console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :", apiError.response ? apiError.response.data : apiError.message);
-      safeEnd('error', { 
-        error: 'Erreur lors de l\'appel à DeepSeek',
-        detail: apiError.response ? apiError.response.data : apiError.message
-      });
-      return;
+    } catch (apiErr) {
+      // LOG: Erreur DeepSeek
+      console.error('[generate-quiz] DeepSeek API error:', apiErr.response?.data || apiErr.message);
+      return res.status(500).json({ error: 'Failed to call DeepSeek API', details: apiErr.response?.data || apiErr.message });
     }
 
-    // Accumulate stream data
-    let accumulatedData = '';
-
-    deepseekStream.on('data', (chunk) => {
-      if (streamEnded) return;
-
-      const chunkStr = chunk.toString();
-      console.log("[/api/generate-quiz] Chunk reçu :", chunkStr);
-
-      // Send chunk to client
-      res.write(`data: ${chunkStr}\n\n`);
-      accumulatedData += chunkStr;
-    });
-
-    deepseekStream.on('end', () => {
-      if (streamEnded) return;
-      console.log("[/api/generate-quiz] Stream terminé");
-
-      // Attempt to parse accumulated data
-      let questions;
-      try {
-        // DeepSeek stream sends data in SSE format, parse the accumulated JSON
-        const lines = accumulatedData.split('\n');
-        let jsonContent = '';
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            jsonContent += line.replace('data: ', '');
-          }
-        }
-
+    const content = response.data.choices?.[0]?.message?.content;
+    let questions;
+    try {
+      questions = JSON.parse(content);
+    } catch (parseErr) {
+      // LOG: Parsing JSON brut échoué
+      console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
+      const jsonMatch = content && content.match(/\[[\s\S]*?\]/);
+      if (jsonMatch) {
         try {
-          questions = JSON.parse(jsonContent);
-          console.log("[/api/generate-quiz] Parsing JSON réussi !");
-        } catch (parseError) {
-          if (jsonrepair) {
-            try {
-              console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative de réparation avec jsonrepair...");
-              questions = JSON.parse(jsonrepair(jsonContent));
-              console.log("[/api/generate-quiz] JSON réparé et parsé avec succès !");
-            } catch (repairError) {
-              console.warn("[/api/generate-quiz] Réparation échouée, tentative d'extraction du JSON...");
-              let cleanedContent = jsonContent.replace(/```json\n?/, '').replace(/\n?```/, '').trim();
-              const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
-              if (jsonMatch) {
-                questions = JSON.parse(jsonMatch[0]);
-                console.log("[/api/generate-quiz] Extraction JSON réussie !");
-              } else {
-                throw new Error('No valid JSON found');
-              }
-            }
-          } else {
-            console.warn("[/api/generate-quiz] Parsing JSON échoué et jsonrepair non disponible...");
-            let cleanedContent = jsonContent.replace(/```json\n?/, '').replace(/\n?```/, '').trim();
-            const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              questions = JSON.parse(jsonMatch[0]);
-              console.log("[/api/generate-quiz] Extraction JSON réussie !");
-            } else {
-              throw new Error('No valid JSON found');
-            }
-          }
+          questions = JSON.parse(jsonMatch[0]);
+        } catch (parseErr2) {
+          // LOG: Parsing bloc JSON échoué
+          console.error('[generate-quiz] Parsing bloc JSON échoué:', parseErr2.message);
+          return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
         }
-
-        // Validate quiz structure
-        if (!Array.isArray(questions)) {
-          throw new Error('Response is not an array');
-        }
-        if (questions.length !== 5) {
-          throw new Error(`Expected 5 questions, received ${questions.length}`);
-        }
-        for (let i = 0; i < questions.length; i++) {
-          const q = questions[i];
-          if (
-            !q.question ||
-            !Array.isArray(q.options) ||
-            q.options.length !== 4 ||
-            !Array.isArray(q.answer) ||
-            q.answer.length < 1 ||
-            typeof q.multi !== 'boolean' ||
-            !q.explanation
-          ) {
-            throw new Error(`Question at index ${i} is missing required fields or has invalid options`);
-          }
-          for (const ans of q.answer) {
-            if (!q.options.includes(ans)) {
-              throw new Error(`Answer "${ans}" at index ${i} does not match any option`);
-            }
-          }
-        }
-
-        console.log("[/api/generate-quiz] Quiz validé avec succès !");
-        safeEnd('complete', questions);
-      } catch (error) {
-        console.error("[/api/generate-quiz] Erreur lors du traitement final :", error.message);
-        safeEnd('error', { 
-          error: 'Failed to process stream',
-          details: error.message,
-          raw: accumulatedData
-        });
+      } else {
+        // LOG: Aucun bloc JSON trouvé
+        console.error('[generate-quiz] Aucun bloc JSON extrait de:', content);
+        return res.status(500).json({ error: 'Failed to parse API response', details: content });
       }
-    });
+    }
 
-    deepseekStream.on('error', (error) => {
-      if (streamEnded) return;
-      console.error("[/api/generate-quiz] Erreur dans le stream :", error);
-      safeEnd('error', { 
-        error: 'Stream error',
-        details: error.message
-      });
-    });
+    // LOG: Quiz généré
+    console.log('[generate-quiz] Quiz généré:', questions);
 
-    // Handle client disconnect
-    req.on('close', () => {
-      if (streamEnded) return;
-      console.log("[/api/generate-quiz] Client disconnected");
-      safeEnd();
-    });
-
+    res.json(questions);
   } catch (error) {
-    if (streamEnded) return;
-    console.error("[/api/generate-quiz] Erreur inattendue :", error);
-    safeEnd('error', { 
-      error: 'Failed to generate quiz questions',
-      details: error.message
-    });
+    // LOG: Erreur globale
+    console.error('[generate-quiz] Server error:', error);
+    res.status(500).json({ error: 'Failed to generate quiz questions', details: error.message });
   }
 });
 
-process.on('SIGTERM', () => {
-  console.log('Received SIGTERM. Performing graceful shutdown...');
-  server.close(() => {
-    console.log('Server closed. Exiting process.');
-    process.exit(0);
+/**
+ * Soumission des réponses utilisateur, stockage dans Supabase
+ */
+app.post('/api/submit-answers', async (req, res) => {
+  const {
+    user_id,
+    answers,            // tableau des réponses de l'utilisateur
+    quiz,               // tableau des questions avec réponses correctes et explications
+    difficulty,
+    category,
+    period,
+    geographical_sphere,
+    time_taken          // optionnel
+  } = req.body;
+
+  // LOG: Payload reçu
+  console.log('[submit-answers] Payload reçu:', req.body);
+
+  if (!user_id || !answers || !quiz || !difficulty || !category || !period || !geographical_sphere) {
+    return res.status(400).json({ error: 'Missing required parameters for score submission' });
+  }
+
+  // Correction des réponses utilisateur
+  let correct_answers = 0;
+  const total_questions = quiz.length;
+  const corrections = quiz.map((question, idx) => {
+    const isCorrect = answers[idx] === question.answer;
+    if (isCorrect) correct_answers++;
+    return {
+      question: question.question,
+      user_answer: answers[idx],
+      correct_answer: question.answer,
+      is_correct: isCorrect,
+      explanation: question.explanation
+    };
+  });
+  const score = correct_answers;
+
+  // Insérer score dans quiz_scores
+  const { data, error } = await supabase
+    .from('quiz_scores')
+    .insert([{
+      console.log('[submit-answers] Payload:', {
+      user_id,
+      score,
+      difficulty,
+      category,
+      period,
+      geographical_sphere,
+      total_questions,
+      time_taken,
+      correct_answers
+      });
+    }])
+    .select();
+
+  if (error) {
+    // LOG: Erreur Supabase
+    console.error('[submit-answers] Supabase error:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+
+  // LOG: Score enregistré
+  console.log('[submit-answers] Score enregistré:', data?.[0]);
+
+  res.json({
+    corrections,
+    score,
+    data: data?.[0] || null
   });
 });
 
-process.on('SIGINT', () => {
-  console.log('Received SIGINT. Performing graceful shutdown...');
-  server.close(() => {
-    console.log('Server closed. Exiting process.');
-    process.exit(0);
-  });
+/**
+ * Leaderboard global (Top 10)
+ */
+app.get('/api/leaderboard', async (req, res) => {
+  // LOG: requête leaderboard
+  console.log('[leaderboard] Requête leaderboard');
+
+  const { data, error } = await supabase
+    .from('quiz_leaderboard')
+    .select('user_id,username,total_score,highest_score,average_score,last_quiz_date,avatar_url')
+    .order('total_score', { ascending: false })
+    .limit(10);
+
+  if (error) {
+    // LOG: Erreur leaderboard
+    console.error('[leaderboard] Supabase error:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+
+  res.json(data);
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+/**
+ * Endpoint de santé
+ */
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', message: 'Server is running' });
+});
+
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`API endpoint available at http://0.0.0.0:${PORT}/api/generate-quiz`);
 });
-
-server.keepAliveTimeout = 60000; // 60s
-server.headersTimeout = 65000; // 65s
