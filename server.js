@@ -74,9 +74,15 @@ La difficulté des questions est ${difficulty}.`;
         { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.7
+      temperature: 0.7,
+      stream: true // Enable streaming
     };
     console.log("[/api/generate-quiz] Payload DeepSeek :", JSON.stringify(payload));
+
+    // Set headers for Server-Sent Events
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
 
     let response;
     try {
@@ -87,155 +93,146 @@ La difficulté des questions est ${difficulty}.`;
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
-          }
+          },
+          responseType: 'stream' // Set Axios to handle streaming response
         }
       );
-      console.log("[/api/generate-quiz] Status code DeepSeek :", response.status);
-      console.log("[/api/generate-quiz] Réponse brute DeepSeek :", response.data);
+      console.log("[/api/generate-quiz] Streaming started from DeepSeek");
     } catch (apiError) {
       console.error("[/api/generate-quiz] Erreur lors de l'appel à DeepSeek :", apiError.response ? apiError.response.data : apiError.message);
-      return res.status(500).json({ 
+      res.write('event: error\ndata: ' + JSON.stringify({ 
         error: 'Erreur lors de l\'appel à DeepSeek',
         details: apiError.response ? apiError.response.data : apiError.message
-      });
+      }) + '\n\n');
+      res.end();
+      return;
     }
 
-    const content = response.data.choices?.[0]?.message?.content;
-    if (!content) {
-      console.error("[/api/generate-quiz] Contenu vide ou structure inattendue :", response.data);
-      return res.status(500).json({ 
-        error: 'Empty or invalid API response',
-        details: 'No content found in API response'
-      });
-    }
-    console.log("[/api/generate-quiz] Contenu reçu (brut) :", content);
+    // Accumulate stream data
+    let accumulatedData = '';
 
-    let questions;
-    // 1e tentative : parsing JSON classique
-    try {
-      questions = JSON.parse(content);
-      console.log("[/api/generate-quiz] Parsing JSON réussi !");
-    } catch (parseError) {
-      // 2e tentative : jsonrepair si dispo
-      if (jsonrepair) {
+    response.data.on('data', (chunk) => {
+      const chunkStr = chunk.toString();
+      console.log("[/api/generate-quiz] Chunk reçu :", chunkStr);
+
+      // Send chunk to client
+      res.write(`data: ${chunkStr}\n\n`);
+
+      // Accumulate chunks for final parsing
+      accumulatedData += chunkStr;
+    });
+
+    response.data.on('end', () => {
+      console.log("[/api/generate-quiz] Stream terminé");
+
+      // Attempt to parse accumulated data
+      let questions;
+      try {
+        // DeepSeek stream sends data in SSE format, parse the accumulated JSON
+        const lines = accumulatedData.split('\n');
+        let jsonContent = '';
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            jsonContent += line.replace('data: ', '');
+          }
+        }
+
         try {
-          console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative de réparation avec jsonrepair...");
-          questions = JSON.parse(jsonrepair(content));
-          console.log("[/api/generate-quiz] JSON réparé et parsé avec succès !");
-        } catch (repairError) {
-          // 3e tentative : extraction regex fallback
-          console.warn("[/api/generate-quiz] Réparation échouée, tentative d'extraction du JSON du texte...");
-          let cleanedContent = content
-            .replace(/```json\n?/, '')
-            .replace(/\n?```/, '')
-            .trim();
-          const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
-          if (jsonMatch) {
+          questions = JSON.parse(jsonContent);
+          console.log("[/api/generate-quiz] Parsing JSON réussi !");
+        } catch (parseError) {
+          if (jsonrepair) {
             try {
-              questions = JSON.parse(jsonMatch[0]);
-              console.log("[/api/generate-quiz] Extraction JSON réussie !");
-            } catch (extractError) {
-              console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
-              return res.status(500).json({ 
-                error: 'Failed to parse API response (extraction)',
-                details: extractError.message,
-                raw: content
-              });
+              console.warn("[/api/generate-quiz] Parsing JSON échoué, tentative de réparation avec jsonrepair...");
+              questions = JSON.parse(jsonrepair(jsonContent));
+              console.log("[/api/generate-quiz] JSON réparé et parsé avec succès !");
+            } catch (repairError) {
+              console.warn("[/api/generate-quiz] Réparation échouée, tentative d'extraction du JSON...");
+              let cleanedContent = jsonContent.replace(/```json\n?/, '').replace(/\n?```/, '').trim();
+              const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
+              if (jsonMatch) {
+                questions = JSON.parse(jsonMatch[0]);
+                console.log("[/api/generate-quiz] Extraction JSON réussie !");
+              } else {
+                throw new Error('No valid JSON found');
+              }
             }
           } else {
-            console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
-            return res.status(500).json({ 
-              error: 'Failed to parse API response',
-              details: repairError.message,
-              raw: content
-            });
+            console.warn("[/api/generate-quiz] Parsing JSON échoué et jsonrepair non disponible...");
+            let cleanedContent = jsonContent.replace(/```json\n?/, '').replace(/\n?```/, '').trim();
+            const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              questions = JSON.parse(jsonMatch[0]);
+              console.log("[/api/generate-quiz] Extraction JSON réussie !");
+            } else {
+              throw new Error('No valid JSON found');
+            }
           }
         }
-      } else {
-        // Si pas de jsonrepair, fallback direct
-        console.warn("[/api/generate-quiz] Parsing JSON échoué et jsonrepair non disponible, tentative extraction regex...");
-        let cleanedContent = content
-          .replace(/```json\n?/, '')
-          .replace(/\n?```/, '')
-          .trim();
-        const jsonMatch = cleanedContent.match(/\[[\s\S]*\]/);
-        if (jsonMatch) {
-          try {
-            questions = JSON.parse(jsonMatch[0]);
-            console.log("[/api/generate-quiz] Extraction JSON réussie !");
-          } catch (extractError) {
-            console.error("[/api/generate-quiz] Extraction JSON échouée :", extractError);
-            return res.status(500).json({ 
-              error: 'Failed to parse API response (extraction)',
-              details: extractError.message,
-              raw: content
-            });
+
+        // Validate quiz structure
+        if (!Array.isArray(questions)) {
+          throw new Error('Response is not an array');
+        }
+        if (questions.length !== 5) {
+          throw new Error(`Expected 5 questions, received ${questions.length}`);
+        }
+        for (let i = 0; i < questions.length; i++) {
+          const q = questions[i];
+          if (
+            !q.question ||
+            !Array.isArray(q.options) ||
+            q.options.length !== 4 ||
+            !Array.isArray(q.answer) ||
+            q.answer.length < 1 ||
+            typeof q.multi !== 'boolean' ||
+            !q.explanation
+          ) {
+            throw new Error(`Question at index ${i} is missing required fields or has invalid options`);
           }
-        } else {
-          console.error("[/api/generate-quiz] Impossible d'extraire du JSON du texte :", cleanedContent);
-          return res.status(500).json({ 
-            error: 'Failed to parse API response',
-            details: parseError.message,
-            raw: content
-          });
+          for (const ans of q.answer) {
+            if (!q.options.includes(ans)) {
+              throw new Error(`Answer "${ans}" at index ${i} does not match any option`);
+            }
+          }
         }
+
+        console.log("[/api/generate-quiz] Quiz validé avec succès !");
+        res.write('event: complete\ndata: ' + JSON.stringify(questions) + '\n\n');
+      } catch (error) {
+        console.error("[/api/generate-quiz] Erreur lors du traitement final :", error.message);
+        res.write('event: error\ndata: ' + JSON.stringify({ 
+          error: 'Failed to process stream',
+          details: error.message,
+          raw: accumulatedData
+        }) + '\n\n');
       }
-    }
+      res.end();
+    });
 
-    // Validation de la structure du quiz
-    if (!Array.isArray(questions)) {
-      console.error("[/api/generate-quiz] La réponse n'est pas un tableau :", questions);
-      return res.status(500).json({ 
-        error: 'Invalid API response format',
-        details: 'Response is not an array'
-      });
-    }
+    response.data.on('error', (error) => {
+      console.error("[/api/generate-quiz] Erreur dans le stream :", error);
+      res.write('event: error\ndata: ' + JSON.stringify({ 
+        error: 'Stream error',
+        details: error.message
+      }) + '\n\n');
+      res.end();
+    });
 
-    if (questions.length !== 5) {
-      console.error("[/api/generate-quiz] Nombre incorrect de questions :", questions.length);
-      return res.status(500).json({ 
-        error: 'Invalid number of questions',
-        details: `Expected 5 questions, received ${questions.length}`
-      });
-    }
-
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      if (
-        !q.question ||
-        !Array.isArray(q.options) ||
-        q.options.length !== 4 ||
-        !Array.isArray(q.answer) ||
-        q.answer.length < 1 ||
-        typeof q.multi !== 'boolean' ||
-        !q.explanation
-      ) {
-        console.error("[/api/generate-quiz] Question invalide à l'index", i, ":", q);
-        return res.status(500).json({ 
-          error: 'Invalid question structure',
-          details: `Question at index ${i} is missing required fields or has invalid options`
-        });
-      }
-      for (const ans of q.answer) {
-        if (!q.options.includes(ans)) {
-          console.error("[/api/generate-quiz] Réponse invalide à l'index", i, ":", ans);
-          return res.status(500).json({ 
-            error: 'Invalid answer',
-            details: `Answer "${ans}" at index ${i} does not match any option`
-          });
-        }
-      }
-    }
-
-    console.log("[/api/generate-quiz] Quiz généré avec succès !");
-    res.json(questions);
+    // Handle client disconnect
+    req.on('close', () => {
+      console.log("[/api/generate-quiz] Client disconnected");
+      response.data.destroy();
+      res.end();
+    });
 
   } catch (error) {
     console.error("[/api/generate-quiz] Erreur inattendue :", error);
-    res.status(500).json({ 
+    res.write('event: error\ndata: ' + JSON.stringify({ 
       error: 'Failed to generate quiz questions',
       details: error.message
-    });
+    }) + '\n\n');
+    res.end();
   }
 });
 
