@@ -76,22 +76,21 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       questions = JSON.parse(content);
     } catch (parseErr) {
       // LOG: Parsing JSON brut échoué
-   console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
+      console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
 
-    // Nettoyage des balises markdown ```json ... ```
-    let cleanedContent = content.trim();
+      // Nettoyage des balises markdown ```json ... ```
+      let cleanedContent = content.trim();
+      if (cleanedContent.startsWith('```')) {
+        cleanedContent = cleanedContent.replace(/```json|```/g, '').trim();
+      }
 
-    if (cleanedContent.startsWith('```')) {
-      // Supprime toutes les balises ```json ou ```
-      cleanedContent = cleanedContent.replace(/```json|```/g, '').trim();
-    }
-
-    try {
-      questions = JSON.parse(cleanedContent);
-    } catch (parseErr2) {
-      // LOG: Parsing JSON échoué après nettoyage
-      console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
-      return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
+      try {
+        questions = JSON.parse(cleanedContent);
+      } catch (parseErr2) {
+        // LOG: Parsing JSON échoué après nettoyage
+        console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
+        return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
+      }
     }
 
     // LOG: Quiz généré
@@ -109,99 +108,110 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
  * Soumission des réponses utilisateur, stockage dans Supabase
  */
 app.post('/api/submit-answers', async (req, res) => {
-  const {
-    user_id,
-    answers,            // tableau des réponses de l'utilisateur
-    quiz,               // tableau des questions avec réponses correctes et explications
-    difficulty,
-    category,
-    period,
-    geographical_sphere,
-    time_taken          // optionnel
-  } = req.body;
+  try {
+    const {
+      user_id,
+      answers,            // tableau des réponses de l'utilisateur
+      quiz,               // tableau des questions avec réponses correctes et explications
+      difficulty,
+      category,
+      period,
+      geographical_sphere,
+      time_taken          // optionnel
+    } = req.body;
 
-  // LOG: Payload reçu
-  console.log('[submit-answers] Payload reçu:', req.body);
+    // LOG: Payload reçu
+    console.log('[submit-answers] Payload reçu:', req.body);
 
-  if (!user_id || !answers || !quiz || !difficulty || !category || !period || !geographical_sphere) {
-    return res.status(400).json({ error: 'Missing required parameters for score submission' });
-  }
+    if (!user_id || !answers || !quiz || !difficulty || !category || !period || !geographical_sphere) {
+      return res.status(400).json({ error: 'Missing required parameters for score submission' });
+    }
 
-  // Correction des réponses utilisateur
-  let correct_answers = 0;
-  const total_questions = quiz.length;
-  const corrections = quiz.map((question, idx) => {
-    const isCorrect = answers[idx] === question.answer;
-    if (isCorrect) correct_answers++;
-    return {
-      question: question.question,
-      user_answer: answers[idx],
-      correct_answer: question.answer,
-      is_correct: isCorrect,
-      explanation: question.explanation
+    // Correction des réponses utilisateur
+    let correct_answers = 0;
+    const total_questions = quiz.length;
+    const corrections = quiz.map((question, idx) => {
+      const isCorrect = answers[idx] === question.answer;
+      if (isCorrect) correct_answers++;
+      return {
+        question: question.question,
+        user_answer: answers[idx],
+        correct_answer: question.answer,
+        is_correct: isCorrect,
+        explanation: question.explanation
+      };
+    });
+    const score = correct_answers;
+
+    // Insérer score dans quiz_scores
+    const payload = {
+      user_id,
+      score,
+      difficulty,
+      category,
+      period,
+      geographical_sphere,
+      total_questions,
+      time_taken,
+      correct_answers
     };
-  });
-  const score = correct_answers;
 
-  // Insérer score dans quiz_scores
-// Prépare l'objet à insérer
-const payload = {
-  user_id,
-  score,
-  difficulty,
-  category,
-  period,
-  geographical_sphere,
-  total_questions,
-  time_taken,
-  correct_answers
-};
+    // Log le payload pour debug
+    console.log('[submit-answers] Payload:', payload);
 
-// Log le payload pour debug
-console.log('[submit-answers] Payload:', payload);
+    // Insertion dans Supabase
+    const { data, error } = await supabase
+      .from('quiz_scores')
+      .insert([payload])
+      .select();
 
-// Insertion dans Supabase
-const { data, error } = await supabase
-  .from('quiz_scores')
-  .insert([payload])
-  .select();
+    if (error) {
+      // LOG: Erreur Supabase
+      console.error('[submit-answers] Supabase error:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
 
-  if (error) {
-    // LOG: Erreur Supabase
-    console.error('[submit-answers] Supabase error:', error.message);
-    return res.status(500).json({ error: error.message });
+    // LOG: Score enregistré
+    console.log('[submit-answers] Score enregistré:', data?.[0]);
+
+    res.json({
+      corrections,
+      score,
+      data: data?.[0] || null
+    });
+  } catch (error) {
+    // LOG: Erreur globale
+    console.error('[submit-answers] Server error:', error);
+    res.status(500).json({ error: 'Failed to submit answers', details: error.message });
   }
-
-  // LOG: Score enregistré
-  console.log('[submit-answers] Score enregistré:', data?.[0]);
-
-  res.json({
-    corrections,
-    score,
-    data: data?.[0] || null
-  });
 });
 
 /**
- * Leaderboard global (Top 10)
+ * Leaderboard global (Top  10)
  */
 app.get('/api/leaderboard', async (req, res) => {
-  // LOG: requête leaderboard
-  console.log('[leaderboard] Requête leaderboard');
+  try {
+    // LOG: requête leaderboard
+    console.log('[leaderboard] Requête leaderboard');
 
-  const { data, error } = await supabase
-    .from('quiz_leaderboard')
-    .select('user_id,username,total_score,highest_score,average_score,last_quiz_date,avatar_url')
-    .order('total_score', { ascending: false })
-    .limit(10);
+    const { data, error } = await supabase
+      .from('quiz_leaderboard')
+      .select('user_id,username,total_score,highest_score,average_score,last_quiz_date,avatar_url')
+      .order('total_score', { ascending: false })
+      .limit(10);
 
-  if (error) {
-    // LOG: Erreur leaderboard
-    console.error('[leaderboard] Supabase error:', error.message);
-    return res.status(500).json({ error: error.message });
+    if (error) {
+      // LOG: Erreur leaderboard
+      console.error('[leaderboard] Supabase error:', error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json(data);
+  } catch (error) {
+    // LOG: Erreur globale
+    console.error('[leader minimizing] Server error:', error);
+    res.status(500).json({ error: 'Failed to fetch leaderboard', details: error.message });
   }
-
-  res.json(data);
 });
 
 /**
