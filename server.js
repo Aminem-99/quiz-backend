@@ -23,16 +23,18 @@ app.use(express.json());
  */
 app.post('/api/generate-quiz', async (req, res) => {
   try {
-    const { difficulty, category, period, geographical_sphere } = req.body;
+    const { difficulty, category, episode, moment, geographical_sphere } = req.body;
 
     // LOG: paramètres reçus
     console.log('[generate-quiz] Payload reçu:', req.body);
 
-    if (!difficulty || !category || !period || !geographical_sphere) {
+    if (!difficulty || !category || !episode || !moment || !geographical_sphere) {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    const prompt = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante:${category} concernant la zone géographique ${geographical_sphere} pendant la période historique ${period}. Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+    const prompt = `Tu es un professeur spécialisé en ${category}. Génére 5 questions à choix multiple sur la zone géographique suivante : ${geographical_sphere}, en te concentrant spécifiquement sur l’épisode historique suivant : "${episode}", et plus précisément sur le moment clé : "${moment}". Chaque question doit comporter 4 propositions de réponse, clairement différentes, et indiquer la bonne réponse.
+
+Présente les résultats **uniquement** au format JSON structuré, sous la forme suivante :
 [
   {
     "question": "Texte de la question",
@@ -41,7 +43,8 @@ app.post('/api/generate-quiz', async (req, res) => {
     "explanation": "Explication de la bonne réponse"
   }
 ]
-La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
+
+La difficulté attendue est : ${difficulty}. Ajoute une brève explication pour chaque bonne réponse, mais ne retourne rien d’autre que ce JSON.`;
 
     const payload = {
       model: 'deepseek-chat',
