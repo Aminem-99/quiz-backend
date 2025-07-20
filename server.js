@@ -23,18 +23,48 @@ app.use(express.json());
  */
 app.post('/api/generate-quiz', async (req, res) => {
   try {
-    const { difficulty, category, episode, moment, geographical_sphere } = req.body;
+    const {
+      difficulty,
+      category,
+      period,
+      geographical_sphere,
+      id_name,
+      moment,
+      episode
+    } = req.body;
 
     // LOG: paramètres reçus
     console.log('[generate-quiz] Payload reçu:', req.body);
 
-    if (!difficulty || !category || !episode || !moment || !geographical_sphere) {
+    if (!difficulty || !category) {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    const prompt = `Tu es un professeur spécialisé en ${category}. Génére 5 questions à choix multiple sur la zone géographique suivante : ${geographical_sphere}, en te concentrant spécifiquement sur l’épisode historique suivant : "${episode}", et plus précisément sur le moment clé : "${moment}". Chaque question doit comporter 4 propositions de réponse, clairement différentes, et indiquer la bonne réponse.
+    // Construction du prompt selon la logique demandée
+    let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
+    let contexte = "";
 
-Présente les résultats **uniquement** au format JSON structuré, sous la forme suivante :
+    if (id_name) {
+      contexte += `concernant le sujet/événement identifié par "${id_name}" `;
+      // On ne met PAS la zone géographique si id_name présent
+    } else if (geographical_sphere) {
+      contexte += `concernant la zone géographique ${geographical_sphere} `;
+    }
+
+    if (moment && episode) {
+      contexte += `(épisode : ${episode}, moment : ${moment}) `;
+      // On NE met PAS la période s'ils sont tous les deux présents
+    } else if (period) {
+      contexte += `pendant la période historique ${period} `;
+      if (episode) contexte += `(épisode : ${episode}) `;
+      if (moment) contexte += `(moment : ${moment}) `;
+    } else {
+      if (episode) contexte += `(épisode : ${episode}) `;
+      if (moment) contexte += `(moment : ${moment}) `;
+    }
+
+    const prompt = `${promptIntro}${contexte}
+Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
@@ -43,8 +73,7 @@ Présente les résultats **uniquement** au format JSON structuré, sous la forme
     "explanation": "Explication de la bonne réponse"
   }
 ]
-
-La difficulté attendue est : ${difficulty}. Ajoute une brève explication pour chaque bonne réponse, mais ne retourne rien d’autre que ce JSON.`;
+La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
 
     const payload = {
       model: 'deepseek-chat',
@@ -81,27 +110,23 @@ La difficulté attendue est : ${difficulty}. Ajoute une brève explication pour 
       // LOG: Parsing JSON brut échoué
       console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
 
-      // Nettoyage des balises markdown ```json ... ```
       let cleanedContent = content.trim();
       if (cleanedContent.startsWith('```')) {
         cleanedContent = cleanedContent.replace(/```json|```/g, '').trim();
       }
-
       try {
         questions = JSON.parse(cleanedContent);
       } catch (parseErr2) {
-        // LOG: Parsing JSON échoué après nettoyage
         console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
         return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
       }
     }
 
     // LOG: Quiz généré
-    console.log('[generate-quiz] Quiz généré:', questions);
+    console.log('[generate-quiz] Quiz Quiz généré:', questions);
 
     res.json(questions);
   } catch (error) {
-    // LOG: Erreur globale
     console.error('[generate-quiz] Server error:', error);
     res.status(500).json({ error: 'Failed to generate quiz questions', details: error.message });
   }
@@ -110,7 +135,7 @@ La difficulté attendue est : ${difficulty}. Ajoute une brève explication pour 
 /**
  * Soumission des réponses utilisateur, stockage dans Supabase
  */
-app.post('/api/submit-answers', async (req, res) => {
+app.post('/**submit-answers**', async (req, res) => {
   try {
     const {
       user_id,
@@ -162,7 +187,7 @@ app.post('/api/submit-answers', async (req, res) => {
     // Log le payload pour debug
     console.log('[submit-answers] Payload:', payload);
 
-    // Insertion dans Supabase
+    // Insertion dans promo
     const { data, error } = await supabase
       .from('quiz_scores')
       .insert([payload])
@@ -212,7 +237,7 @@ app.get('/api/leaderboard', async (req, res) => {
     res.json(data);
   } catch (error) {
     // LOG: Erreur globale
-    console.error('[leader minimizing] Server error:', error);
+    console.error('[leaderboard] Server error:', error);
     res.status(500).json({ error: 'Failed to fetch leaderboard', details: error.message });
   }
 });
