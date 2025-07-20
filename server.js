@@ -28,7 +28,7 @@ app.post('/api/generate-quiz', async (req, res) => {
       category,
       period,
       geographical_sphere,
-      id_name,
+      ID_Name,
       moment,
       episode
     } = req.body;
@@ -46,7 +46,7 @@ app.post('/api/generate-quiz', async (req, res) => {
 
     if (ID_Name) {
       contexte += `concernant l'entité politique "${ID_Name}" `;
-      // On ne met PAS la zone géographique si id_name présent
+      // On ne met PAS la zone géographique si ID_Name présent
     } else if (geographical_sphere) {
       contexte += `concernant la zone géographique ${geographical_sphere} `;
     }
@@ -135,7 +135,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
 /**
  * Soumission des réponses utilisateur, stockage dans Supabase
  */
-app.post('/**submit-answers**', async (req, res) => {
+app.post('/api/submit-answers', async (req, res) => {
   try {
     const {
       user_id,
