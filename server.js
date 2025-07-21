@@ -3,22 +3,28 @@ import cors from 'cors';
 import axios from 'axios';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-console.log('[DEBUG] Raw SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY);
 
+// Chargement des variables d'environnement
 dotenv.config();
 
-console.log("SUPABASE_ANON_KEY =", process.env.SUPABASE_ANON_KEY);
-console.log("SUPABASE_URL =", process.env.SUPABASE_URL);
+// Logs de debug pour les clés Supabase
+console.log('[DEBUG] Raw SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY);
+console.log('[DEBUG] SUPABASE_URL:', process.env.SUPABASE_URL);
 
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Supabase client
+// Nettoyage de la clé si elle commence par un égal
 const cleanSupabaseKey = process.env.SUPABASE_ANON_KEY?.replace(/^=+/, '');
+console.log('[DEBUG] Supabase Key nettoyée:', cleanSupabaseKey);
+
+// Initialisation du client Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   cleanSupabaseKey
 );
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+// Middleware
 app.use(cors());
 app.use(express.json());
 
