@@ -14,9 +14,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Supabase client
+const cleanSupabaseKey = process.env.SUPABASE_ANON_KEY?.replace(/^=+/, '');
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY?.replace(/^=+/, '')
+  cleanSupabaseKey
 );
 app.use(cors());
 app.use(express.json());
