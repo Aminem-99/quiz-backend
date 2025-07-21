@@ -79,7 +79,7 @@ app.post('/api/generate-quiz', async (req, res) => {
       return res.json(cachedQuizzes[idx].quiz_json);
     }
 
-let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
+let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
 let contexte = "";
 
 if (mode === 'journey' && ID_Name && episode && moment) {
