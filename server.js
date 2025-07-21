@@ -75,13 +75,11 @@ app.post('/api/generate-quiz', async (req, res) => {
 let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
 let contexte = "";
 
-if (ID_Name && geographical_sphere) {
-  contexte += `concernant le sujet/événement identifié par "${ID_Name}" (contexte : zone géographique "${geographical_sphere}") `;
-} else if (ID_Name) {
-  contexte += `concernant le sujet/événement identifié par "${ID_Name}" `;
-} else if (geographical_sphere) {
-  contexte += `concernant la zone géographique "${geographical_sphere}" `;
-}
+if (ID_Name) {
+  contexte += `concernant exclusivement le sujet/événement identifié par "${ID_Name}"`;
+  if (geographical_sphere) {
+    contexte += ` (qui se situe dans la zone géographique "${geographical_sphere}")`;
+  }
 
 if (moment && episode) {
   contexte += `(épisode : ${episode}, moment : ${moment}) `;
@@ -95,6 +93,8 @@ if (moment && episode) {
 }
 
 const prompt = `${promptIntro}${contexte}
+**Attention:** Toutes les questions doivent porter uniquement sur "${ID_Name}" et non sur la zone géographique ou la période de façon générale. 
+Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
 Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
