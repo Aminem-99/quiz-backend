@@ -79,29 +79,24 @@ app.post('/api/generate-quiz', async (req, res) => {
     }
 
 // Construction du prompt selon la logique demandée
-let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
-let contexte = "";
+let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;let contexte = "";
 
-if (ID_Name) {
-  contexte += `concernant exclusivement le sujet/événement identifié par "${ID_Name}"`;
-  if (geographical_sphere) {
-    contexte += ` (qui se situe dans la zone géographique "${geographical_sphere}")`;
+if (ID_Name) { // Entité sélectionnée
+  contexte += `concernant exclusivement l'entité "${ID_Name}"`;
+  if (period) {
+    contexte += ` pendant la période "${period}"`;
   }
-}
-if (moment && episode) {
-  contexte += `(épisode : ${episode}, moment : ${moment}) `;
-} else if (period) {
-  contexte += `pendant la période historique ${period} `;
-  if (episode) contexte += `(épisode : ${episode}) `;
-  if (moment) contexte += `(moment : ${moment}) `;
-} else {
-  if (episode) contexte += `(épisode : ${episode}) `;
-  if (moment) contexte += `(moment : ${moment}) `;
+  contexte += `. Ne pose aucune question sur la zone géographique ou la période en général, uniquement sur "${ID_Name}".`;
+} else if (geographical_sphere) { // Si pas d'entité, quiz sur la zone
+  contexte += `concernant la zone géographique "${geographical_sphere}"`;
+  if (period) {
+    contexte += ` pendant la période "${period}"`;
+  }
 }
 
 const prompt = `${promptIntro}${contexte}
-**Attention:** Toutes les questions doivent porter uniquement sur "${ID_Name}" et non sur la zone géographique ou la période de façon générale. 
-Ne réponds que par le JSON, mais ajoute une explication supplémentaire.Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. 
+Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
