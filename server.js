@@ -122,7 +122,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
         {
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY?.replace(/^=+/, '')}`
           }
         }
       );
