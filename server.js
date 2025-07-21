@@ -141,10 +141,16 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
 
       // Nettoyage des balises markdown ```json ... ```
-      let cleanedContent = content.trim();
-      if (cleanedContent.startsWith('```')) {
-        cleanedContent = cleanedContent.replace(/```json|```/g, '').trim();
-      }
+let cleanedContent = content.trim();
+
+// Supprime les blocs de markdown
+cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
+
+// Tente d'extraire uniquement le tableau JSON
+const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
+if (arrayMatch) {
+  cleanedContent = arrayMatch[0];
+}
 
       try {
         questions = JSON.parse(cleanedContent);
