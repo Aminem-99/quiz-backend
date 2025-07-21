@@ -79,14 +79,20 @@ app.post('/api/generate-quiz', async (req, res) => {
     }
 
 // Construction du prompt selon la logique demandée
-let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;let contexte = "";
+let promptIntro = `Génère 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category} `;
+let contexte = "";
 
 if (ID_Name) { // Entité sélectionnée
   contexte += `concernant exclusivement l'entité "${ID_Name}"`;
+  // Ajoute le type d'entité si tu l'as (ex: Province, Personnage, etc.)
+  if (req.body.entity_type) {
+    contexte += ` (type : ${req.body.entity_type})`;
+  }
   if (period) {
     contexte += ` pendant la période "${period}"`;
   }
-  contexte += `. Ne pose aucune question sur la zone géographique ou la période en général, uniquement sur "${ID_Name}".`;
+  contexte += `. 
+  **Consigne : Ne pose que des questions dont la bonne réponse concerne "${ID_Name}" et pas le contexte général de la période ou de la zone géographique. Chaque question doit être spécifique à "${ID_Name}".**`;
 } else if (geographical_sphere) { // Si pas d'entité, quiz sur la zone
   contexte += `concernant la zone géographique "${geographical_sphere}"`;
   if (period) {
@@ -106,6 +112,7 @@ Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
   }
 ]
 La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
+
 
     const payload = {
       model: 'deepseek-chat',
