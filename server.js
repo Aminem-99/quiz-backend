@@ -80,35 +80,22 @@ app.post('/api/generate-quiz', async (req, res) => {
     }
 
 let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
-let contexte = "";
-
-if (mode === 'journey' && ID_Name && episode && moment) {
-  // Mode Parcours : questions sur le moment d'un épisode pour une entité
-  contexte += `Pose des questions sur l'entité "${ID_Name}" dans le contexte précis de l'épisode "${episode}" et du moment historique "${moment}" durant la période "${period}" et la zone "${geographical_sphere}". 
-  Les questions doivent porter sur les faits, événements, personnages ou enjeux spécifiques à ce moment de l'histoire de "${ID_Name}". 
-  Ne pose pas de questions générales sur la période ou la zone, mais bien sur ce moment précis dans le parcours de "${ID_Name}".`;
-} else if (ID_Name && period) {
-  // Mode Libre : questions sur l'entité pour la période choisie
-  contexte += `Pose des questions sur l'entité "${ID_Name}" en lien avec la période "${period}" et la zone géographique "${geographical_sphere}". 
-  Les questions doivent porter sur les événements, les faits, les évolutions ou les personnages liés à "${ID_Name}" pendant cette période. 
-  Ne pose pas de questions hors de la période sélectionnée.`;
-} else if (geographical_sphere && period) {
-  // Quiz sur une zone pour une période
-  contexte += `Pose des questions sur la zone géographique "${geographical_sphere}" pendant la période "${period}". 
-  Les questions doivent porter sur les faits, événements ou évolutions historiques propres à cette zone et période.`;
-}
-
+// ... contexte ...
 const prompt = `${promptIntro}${contexte}
-Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. 
+Certaines questions doivent avoir plusieurs bonnes réponses (minimum 1, maximum 3), indique-les dans un tableau "answer": ["Option correcte 1", "Option correcte 2"]. 
+Ajoute aussi une propriété "multi": true si la question a plusieurs bonnes réponses, sinon "multi": false.
+Chaque question doit avoir 4 propositions de réponse différentes.
 Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
     "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": "Option correcte",
-    "explanation": "Explication de la bonne réponse"
+    "answer": ["Option correcte 1", "Option correcte 2"],
+    "explanation": "Explication de la bonne réponse",
+    "multi": true
   }
 ]
+Si une question n'a qu'une bonne réponse, "answer" doit être un tableau avec un seul élément et "multi": false.
 La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
 
     const payload = {
