@@ -40,7 +40,8 @@ app.post('/api/generate-quiz', async (req, res) => {
       geographical_sphere,
       ID_Name,
       moment,
-      episode
+      episode,
+      mode
     } = req.body;
 
     // LOG: paramètres reçus
