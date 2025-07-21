@@ -80,7 +80,7 @@ if (ID_Name) {
   if (geographical_sphere) {
     contexte += ` (qui se situe dans la zone géographique "${geographical_sphere}")`;
   }
-
+}
 if (moment && episode) {
   contexte += `(épisode : ${episode}, moment : ${moment}) `;
 } else if (period) {
@@ -94,8 +94,7 @@ if (moment && episode) {
 
 const prompt = `${promptIntro}${contexte}
 **Attention:** Toutes les questions doivent porter uniquement sur "${ID_Name}" et non sur la zone géographique ou la période de façon générale. 
-Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
-Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`; Chaque question doit avoir 4 propositions de réponse différentes et indiquer la bonne réponse. Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 [
   {
     "question": "Texte de la question",
