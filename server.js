@@ -79,6 +79,8 @@ if (ID_Name && geographical_sphere) {
   contexte += `concernant le sujet/événement identifié par "${ID_Name}" (contexte : zone géographique "${geographical_sphere}") `;
 } else if (ID_Name) {
   contexte += `concernant le sujet/événement identifié par "${ID_Name}" `;
+} else if (geographical_sphere) {
+  contexte += `concernant la zone géographique "${geographical_sphere}" `;
 }
 
 if (moment && episode) {
