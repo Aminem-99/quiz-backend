@@ -79,9 +79,20 @@ app.post('/api/generate-quiz', async (req, res) => {
       return res.json(cachedQuizzes[idx].quiz_json);
     }
 
-let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
-// ... contexte ...
-const prompt = `${promptIntro}${contexte}
+    // Définition du contexte
+    const contexte = `
+Tu es professeur d'histoire. 
+Sujet du quiz : ${category}
+Période : ${period || 'non précisée'}
+Épisode : ${episode || 'non précisé'}
+Moment clé : ${moment || 'non précisé'}
+Zone géographique : ${geographical_sphere || 'non précisée'}
+Pays/Région : ${ID_Name || 'non précisé'}
+Mode : ${mode || 'standard'}
+`;
+
+    let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
+    const prompt = `${promptIntro}${contexte}
 Certaines questions doivent avoir plusieurs bonnes réponses (minimum 1, maximum 3), indique-les dans un tableau "answer": ["Option correcte 1", "Option correcte 2"]. 
 Ajoute aussi une propriété "multi": true si la question a plusieurs bonnes réponses, sinon "multi": false.
 Chaque question doit avoir 4 propositions de réponse différentes.
@@ -115,7 +126,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
         {
           headers: {
             'Content-Type': 'application/json',
-  'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+            'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
           }
         }
       );
@@ -134,16 +145,16 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
 
       // Nettoyage des balises markdown ```json ... ```
-let cleanedContent = content.trim();
+      let cleanedContent = content.trim();
 
-// Supprime les blocs de markdown
-cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
+      // Supprime les blocs de markdown
+      cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
 
-// Tente d'extraire uniquement le tableau JSON
-const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
-if (arrayMatch) {
-  cleanedContent = arrayMatch[0];
-}
+      // Tente d'extraire uniquement le tableau JSON
+      const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
+      if (arrayMatch) {
+        cleanedContent = arrayMatch[0];
+      }
 
       try {
         questions = JSON.parse(cleanedContent);
