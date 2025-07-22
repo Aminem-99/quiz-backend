@@ -90,6 +90,7 @@ Zone géographique : ${geographical_sphere || 'non précisée'}
 Pays/Région : ${ID_Name || 'non précisé'}
 Mode : ${mode || 'standard'}
 `;
+    // ===========================================================
 
     let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
     const prompt = `${promptIntro}${contexte}
