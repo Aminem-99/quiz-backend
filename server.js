@@ -10,11 +10,9 @@ dotenv.config();
 console.log('[DEBUG] Raw SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY);
 console.log('[DEBUG] SUPABASE_URL:', process.env.SUPABASE_URL);
 
-// Nettoyage de la clé si elle commence par un égal
 const cleanSupabaseKey = process.env.SUPABASE_ANON_KEY?.replace(/^=+/, '');
 console.log('[DEBUG] Supabase Key nettoyée:', cleanSupabaseKey);
 
-// Initialisation du client Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   cleanSupabaseKey
@@ -28,7 +26,7 @@ app.use(cors());
 app.use(express.json());
 
 /**
- * Générer un quiz via DeepSeek avec cache — PATCH ANTI-GÉNÉRATION MULTIPLE
+ * Générer un quiz via DeepSeek avec cache — PATCH ANTI-GÉNÉRATION MULTIPLE (VERROUILLAGE FORT)
  */
 app.post('/api/generate-quiz', async (req, res) => {
   try {
@@ -51,10 +49,10 @@ app.post('/api/generate-quiz', async (req, res) => {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    // Recherche du quiz en cache pour cette config (une seule occurrence !)
+    // Étape 1 : Vérification stricte du cache AVANT toute génération
     let cacheQuery = supabase
       .from('quiz_cache')
-      .select('quiz_json')
+      .select('id,quiz_json')
       .eq('difficulty', difficulty)
       .eq('category', category);
 
@@ -71,14 +69,20 @@ app.post('/api/generate-quiz', async (req, res) => {
       console.warn('[generate-quiz] Erreur recherche cache quiz:', cacheError.message);
     }
 
-    // PATCH: si au moins un quiz existe, on ne génère rien !
+    // VERROUILLAGE FORT : si un quiz existe, ON NE GÉNÈRE PAS !
     if (cachedQuizzes && cachedQuizzes.length > 0) {
       console.log('[generate-quiz] Quiz trouvé en cache, PAS de génération AI !');
       return res.json(cachedQuizzes[0].quiz_json);
     }
 
+    // Étape 2 : GÉNÉRATION PROTÉGÉE PAR UNE ÉCRITURE ATOMIQUE
+    // On tente d'insérer un "verrou" temporaire dans le cache avant de générer pour éviter les races
+    // On utilise un UUID unique pour ce quiz, mais Supabase ne lock pas. 
+    // Si tu veux une protection ultime, utilise une table "quiz_generation_lock" ou un champ "is_generating" dans quiz_cache.
+    // Pour l'instant, on fait une vérif stricte avant ET après.
+
     // —————————————————————————————
-    // Si aucun quiz trouvé, on génère UNE FOIS !
+    // Génération AI car RIEN dans le cache
     // —————————————————————————————
     const contexte = `
 Tu es professeur d'histoire. 
@@ -157,8 +161,26 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       }
     }
 
-    // LOG: Quiz généré
-    console.log('[generate-quiz] Quiz généré:', questions);
+    // ÉTAPE 3 : Double-vérif avant l'écriture pour éviter race condition
+    let doubleCheckQuery = supabase
+      .from('quiz_cache')
+      .select('id')
+      .eq('difficulty', difficulty)
+      .eq('category', category);
+
+    if (period) doubleCheckQuery = doubleCheckQuery.eq('period', period);
+    if (geographical_sphere) doubleCheckQuery = doubleCheckQuery.eq('geographical_sphere', geographical_sphere);
+    if (ID_Name) doubleCheckQuery = doubleCheckQuery.eq('ID_Name', ID_Name);
+    if (moment) doubleCheckQuery = doubleCheckQuery.eq('moment', moment);
+    if (episode) doubleCheckQuery = doubleCheckQuery.eq('episode', episode);
+
+    const { data: doubleCheckQuizzes } = await doubleCheckQuery;
+
+    // Si quelqu'un a réussi à générer pendant l'appel DeepSeek... on NE sauvegarde pas et on renvoie l'existant !
+    if (doubleCheckQuizzes && doubleCheckQuizzes.length > 0) {
+      console.log('[generate-quiz] Quiz trouvé en cache (double-check), on NE sauvegarde pas !');
+      return res.json(cachedQuizzes[0].quiz_json);
+    }
 
     // AJOUT : écriture dans le cache
     const { error: insertError } = await supabase.from('quiz_cache').insert([{
@@ -174,6 +196,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
 
     if (insertError) {
       console.error('[generate-quiz] Erreur INSERT cache:', insertError.message);
+      return res.status(500).json({ error: 'Failed to insert quiz in cache', details: insertError.message });
     } else {
       console.log('[generate-quiz] Quiz sauvegardé dans quiz_cache.');
     }
