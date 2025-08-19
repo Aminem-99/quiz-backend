@@ -4,7 +4,6 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 
-// Chargement des variables d'environnement
 dotenv.config();
 
 console.log('[DEBUG] Raw SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY);
@@ -21,7 +20,6 @@ const supabase = createClient(
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -39,13 +37,12 @@ app.post('/api/generate-quiz', async (req, res) => {
       moment,
       episode,
       mode,
-      matchId // facultatif, présent uniquement pour multi
+      matchId // multi uniquement
     } = req.body;
 
     // Log
     console.log('[generate-quiz] Payload reçu:', req.body);
 
-    // Vérification des paramètres requis
     if (!difficulty || !category) {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
@@ -54,10 +51,10 @@ app.post('/api/generate-quiz', async (req, res) => {
     // ------ MODE MULTIJOUEUR -------
     // ===============================
     if (matchId) {
-      // Récupération et contrôle du match
+      // Récupération ultra safe du match
       const { data: match, error: matchError } = await supabase
         .from('quiz_match')
-        .select('quiz_payload, difficulty, category, period, geographical_sphere, ID_Name, moment, episode, mode')
+        .select('quiz_payload, difficulty, category, period, geographical_sphere, ID_Name, moment, episode, mode, status')
         .eq('id', matchId)
         .single();
 
@@ -65,10 +62,16 @@ app.post('/api/generate-quiz', async (req, res) => {
         return res.status(404).json({ error: 'Match not found', details: matchError?.message });
       }
 
-      // Si quiz déjà généré, on le renvoie
+      // Backend ultra safe : ne génère QUE si quiz_payload est null ET status "waiting"
       if (match.quiz_payload) {
         console.log(`[generate-quiz] Quiz déjà généré pour match ${matchId}, renvoi du payload existant`);
         return res.json(match.quiz_payload);
+      }
+      if (match.status !== 'waiting') {
+        // Si le match n'est pas en attente, on ne génère pas
+        console.log(`[generate-quiz] Match ${matchId} status n'est pas 'waiting', renvoi quiz_payload ou erreur`);
+        // On renvoie le quiz ou une erreur explicite
+        return res.status(409).json({ error: 'Quiz déjà généré ou match déjà commencé.' });
       }
 
       // Génération du quiz (avec la config du match)
@@ -127,7 +130,6 @@ La difficulté des questions est ${match.difficulty}. Ne réponds que par le JSO
         return res.status(500).json({ error: 'Failed to call DeepSeek API', details: apiErr.response?.data || apiErr.message });
       }
 
-      // Parsing JSON
       const content = response.data.choices?.[0]?.message?.content;
       let questions;
       try {
@@ -147,12 +149,13 @@ La difficulté des questions est ${match.difficulty}. Ne réponds que par le JSO
         }
       }
 
-      // Ecriture atomique : on stocke le quiz dans le match UNIQUEMENT si quiz_payload est encore null
+      // Ecriture atomique : update quiz_payload UNIQUEMENT si quiz_payload est encore null ET status "waiting"
       const { data: updated, error: updateError } = await supabase
         .from('quiz_match')
-        .update({ quiz_payload: questions })
+        .update({ quiz_payload: questions, status: 'ready' })
         .eq('id', matchId)
         .is('quiz_payload', null)
+        .eq('status', 'waiting')
         .select('quiz_payload')
         .single();
 
@@ -176,7 +179,6 @@ La difficulté des questions est ${match.difficulty}. Ne réponds que par le JSO
     // ===============================
     // --------- MODE SOLO -----------
     // ===============================
-    // Génération à la volée, pas de cache, pas de pénalité
     const contexte = `
 Tu es professeur d'histoire. 
 Sujet du quiz : ${category}
@@ -255,7 +257,6 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
     return res.json(questions);
 
   } catch (error) {
-    // LOG: Erreur globale
     console.error('[generate-quiz] Server error:', error);
     res.status(500).json({ error: 'Failed to generate quiz questions', details: error.message });
   }
@@ -277,7 +278,6 @@ app.post('/api/submit-answers', async (req, res) => {
       time_taken
     } = req.body;
 
-    // LOG: Payload reçu
     console.log('[submit-answers] Payload reçu:', req.body);
 
     if (!user_id || !answers || !quiz || !difficulty || !category || !period || !geographical_sphere) {
@@ -287,7 +287,6 @@ app.post('/api/submit-answers', async (req, res) => {
     let correct_answers = 0;
     const total_questions = quiz.length;
     const corrections = quiz.map((question, idx) => {
-      // Multi réponse compatible
       const userAnswerArr = Array.isArray(answers[idx]) ? answers[idx] : [answers[idx]];
       const correctAnswerArr = Array.isArray(question.answer) ? question.answer : [question.answer];
       const isCorrect = userAnswerArr.length === correctAnswerArr.length &&
@@ -346,7 +345,6 @@ app.post('/api/submit-answers', async (req, res) => {
 app.get('/api/leaderboard', async (req, res) => {
   try {
     console.log('[leaderboard] Requête leaderboard');
-
     const { data, error } = await supabase
       .from('quiz_leaderboard')
       .select('user_id,username,total_score,highest_score,average_score,last_quiz_date,avatar_url')
@@ -365,9 +363,6 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
-/**
- * Endpoint de santé
- */
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
 });
