@@ -150,14 +150,13 @@ La difficulté des questions est ${match.difficulty}. Ne réponds que par le JSO
       }
 
       // Ecriture atomique : update quiz_payload UNIQUEMENT si quiz_payload est encore null ET status "waiting"
-      const { data: updated, error: updateError } = await supabase
-        .from('quiz_match')
-        .update({ quiz_payload: questions, status: 'ready' })
-        .eq('id', matchId)
-        .is('quiz_payload', null)
-        .eq('status', 'waiting')
-        .select('quiz_payload')
-        .single();
+const { data: updated, error: updateError } = await supabase
+  .from('quiz_match')
+  .update({ quiz_payload: questions, status: 'ready' })
+  .eq('id', matchId)
+  .is('quiz_payload', null)
+  .eq('status', 'waiting')
+  .select('quiz_payload');
 
       if (updated && updated.quiz_payload) {
         console.log(`[generate-quiz] Quiz généré et enregistré pour match ${matchId}`);
@@ -370,3 +369,4 @@ app.get('/api/health', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
+
