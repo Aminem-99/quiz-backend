@@ -26,7 +26,7 @@ app.use(cors());
 app.use(express.json());
 
 /**
- * Générer un quiz via DeepSeek avec cache — PATCH ANTI-GÉNÉRATION MULTIPLE (VERROUILLAGE FORT)
+ * Générer un quiz (solo OU multi selon présence matchId)
  */
 app.post('/api/generate-quiz', async (req, res) => {
   try {
@@ -38,10 +38,11 @@ app.post('/api/generate-quiz', async (req, res) => {
       ID_Name,
       moment,
       episode,
-      mode
+      mode,
+      matchId // facultatif, présent uniquement pour multi
     } = req.body;
 
-    // LOG: paramètres reçus
+    // Log
     console.log('[generate-quiz] Payload reçu:', req.body);
 
     // Vérification des paramètres requis
@@ -49,41 +50,133 @@ app.post('/api/generate-quiz', async (req, res) => {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    // Étape 1 : Vérification stricte du cache AVANT toute génération
-    let cacheQuery = supabase
-      .from('quiz_cache')
-      .select('id,quiz_json')
-      .eq('difficulty', difficulty)
-      .eq('category', category);
+    // ===============================
+    // ------ MODE MULTIJOUEUR -------
+    // ===============================
+    if (matchId) {
+      // Récupération et contrôle du match
+      const { data: match, error: matchError } = await supabase
+        .from('quiz_match')
+        .select('quiz_payload, difficulty, category, period, geographical_sphere, ID_Name, moment, episode, mode')
+        .eq('id', matchId)
+        .single();
 
-    if (period) cacheQuery = cacheQuery.eq('period', period);
-    if (geographical_sphere) cacheQuery = cacheQuery.eq('geographical_sphere', geographical_sphere);
-    if (ID_Name) cacheQuery = cacheQuery.eq('ID_Name', ID_Name);
-    if (moment) cacheQuery = cacheQuery.eq('moment', moment);
-    if (episode) cacheQuery = cacheQuery.eq('episode', episode);
+      if (matchError || !match) {
+        return res.status(404).json({ error: 'Match not found', details: matchError?.message });
+      }
 
-    const { data: cachedQuizzes, error: cacheError } = await cacheQuery
-      .order('created_at', { ascending: false });
+      // Si quiz déjà généré, on le renvoie
+      if (match.quiz_payload) {
+        console.log(`[generate-quiz] Quiz déjà généré pour match ${matchId}, renvoi du payload existant`);
+        return res.json(match.quiz_payload);
+      }
 
-    if (cacheError) {
-      console.warn('[generate-quiz] Erreur recherche cache quiz:', cacheError.message);
+      // Génération du quiz (avec la config du match)
+      const contexte = `
+Tu es professeur d'histoire. 
+Sujet du quiz : ${match.category}
+Période : ${match.period || 'non précisée'}
+Épisode : ${match.episode || 'non précisé'}
+Moment clé : ${match.moment || 'non précisé'}
+Zone géographique : ${match.geographical_sphere || 'non précisée'}
+Pays/Région : ${match.ID_Name || 'non précisé'}
+Mode : ${match.mode || 'standard'}
+`;
+
+      let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${match.category}. `;
+      const prompt = `${promptIntro}${contexte}
+Certaines questions doivent avoir plusieurs bonnes réponses (minimum 1, maximum 3), indique-les dans un tableau "answer": ["Option correcte 1", "Option correcte 2"]. 
+Ajoute aussi une propriété "multi": true si la question a plusieurs bonnes réponses, sinon "multi": false.
+Chaque question doit avoir 4 propositions de réponse différentes.
+Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
+[
+  {
+    "question": "Texte de la question",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer": ["Option correcte 1", "Option correcte 2"],
+    "explanation": "Explication de la bonne réponse",
+    "multi": true
+  }
+]
+Si une question n'a qu'une bonne réponse, "answer" doit être un tableau avec un seul élément et "multi": false.
+La difficulté des questions est ${match.difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
+
+      const aiPayload = {
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
+          { role: 'user', content: prompt }
+        ],
+        temperature: 0.7
+      };
+
+      let response;
+      try {
+        response = await axios.post(
+          'https://api.deepseek.com/v1/chat/completions',
+          aiPayload,
+          {
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+            }
+          }
+        );
+      } catch (apiErr) {
+        console.error('[generate-quiz] DeepSeek API error:', apiErr.response?.data || apiErr.message);
+        return res.status(500).json({ error: 'Failed to call DeepSeek API', details: apiErr.response?.data || apiErr.message });
+      }
+
+      // Parsing JSON
+      const content = response.data.choices?.[0]?.message?.content;
+      let questions;
+      try {
+        questions = JSON.parse(content);
+      } catch (parseErr) {
+        let cleanedContent = content.trim();
+        cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
+        const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
+        if (arrayMatch) {
+          cleanedContent = arrayMatch[0];
+        }
+        try {
+          questions = JSON.parse(cleanedContent);
+        } catch (parseErr2) {
+          console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
+          return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
+        }
+      }
+
+      // Ecriture atomique : on stocke le quiz dans le match UNIQUEMENT si quiz_payload est encore null
+      const { data: updated, error: updateError } = await supabase
+        .from('quiz_match')
+        .update({ quiz_payload: questions })
+        .eq('id', matchId)
+        .is('quiz_payload', null)
+        .select('quiz_payload')
+        .single();
+
+      if (updated && updated.quiz_payload) {
+        console.log(`[generate-quiz] Quiz généré et enregistré pour match ${matchId}`);
+        return res.json(updated.quiz_payload);
+      }
+      // Si quelqu'un l'a généré entre-temps, on relit et renvoie
+      const { data: finalMatch, error: finalError } = await supabase
+        .from('quiz_match')
+        .select('quiz_payload')
+        .eq('id', matchId)
+        .single();
+      if (finalError || !finalMatch) {
+        return res.status(500).json({ error: 'Failed to retrieve quiz after concurrent generation', details: finalError?.message });
+      }
+      console.log(`[generate-quiz] Quiz généré concurrent pour match ${matchId}, renvoi quiz_payload`);
+      return res.json(finalMatch.quiz_payload);
     }
 
-    // VERROUILLAGE FORT : si un quiz existe, ON NE GÉNÈRE PAS !
-    if (cachedQuizzes && cachedQuizzes.length > 0) {
-      console.log('[generate-quiz] Quiz trouvé en cache, PAS de génération AI !');
-      return res.json(cachedQuizzes[0].quiz_json);
-    }
-
-    // Étape 2 : GÉNÉRATION PROTÉGÉE PAR UNE ÉCRITURE ATOMIQUE
-    // On tente d'insérer un "verrou" temporaire dans le cache avant de générer pour éviter les races
-    // On utilise un UUID unique pour ce quiz, mais Supabase ne lock pas. 
-    // Si tu veux une protection ultime, utilise une table "quiz_generation_lock" ou un champ "is_generating" dans quiz_cache.
-    // Pour l'instant, on fait une vérif stricte avant ET après.
-
-    // —————————————————————————————
-    // Génération AI car RIEN dans le cache
-    // —————————————————————————————
+    // ===============================
+    // --------- MODE SOLO -----------
+    // ===============================
+    // Génération à la volée, pas de cache, pas de pénalité
     const contexte = `
 Tu es professeur d'histoire. 
 Sujet du quiz : ${category}
@@ -144,15 +237,12 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
     try {
       questions = JSON.parse(content);
     } catch (parseErr) {
-      console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
-
       let cleanedContent = content.trim();
       cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
       const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
       if (arrayMatch) {
         cleanedContent = arrayMatch[0];
       }
-
       try {
         questions = JSON.parse(cleanedContent);
       } catch (parseErr2) {
@@ -161,47 +251,9 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       }
     }
 
-    // ÉTAPE 3 : Double-vérif avant l'écriture pour éviter race condition
-    let doubleCheckQuery = supabase
-      .from('quiz_cache')
-      .select('id')
-      .eq('difficulty', difficulty)
-      .eq('category', category);
+    // On ne stocke rien en solo, on renvoie juste le quiz généré
+    return res.json(questions);
 
-    if (period) doubleCheckQuery = doubleCheckQuery.eq('period', period);
-    if (geographical_sphere) doubleCheckQuery = doubleCheckQuery.eq('geographical_sphere', geographical_sphere);
-    if (ID_Name) doubleCheckQuery = doubleCheckQuery.eq('ID_Name', ID_Name);
-    if (moment) doubleCheckQuery = doubleCheckQuery.eq('moment', moment);
-    if (episode) doubleCheckQuery = doubleCheckQuery.eq('episode', episode);
-
-    const { data: doubleCheckQuizzes } = await doubleCheckQuery;
-
-    // Si quelqu'un a réussi à générer pendant l'appel DeepSeek... on NE sauvegarde pas et on renvoie l'existant !
-    if (doubleCheckQuizzes && doubleCheckQuizzes.length > 0) {
-      console.log('[generate-quiz] Quiz trouvé en cache (double-check), on NE sauvegarde pas !');
-      return res.json(cachedQuizzes[0].quiz_json);
-    }
-
-    // AJOUT : écriture dans le cache
-    const { error: insertError } = await supabase.from('quiz_cache').insert([{
-      difficulty,
-      category,
-      period,
-      geographical_sphere,
-      ID_Name,
-      moment,
-      episode,
-      quiz_json: questions
-    }]);
-
-    if (insertError) {
-      console.error('[generate-quiz] Erreur INSERT cache:', insertError.message);
-      return res.status(500).json({ error: 'Failed to insert quiz in cache', details: insertError.message });
-    } else {
-      console.log('[generate-quiz] Quiz sauvegardé dans quiz_cache.');
-    }
-
-    res.json(questions);
   } catch (error) {
     // LOG: Erreur globale
     console.error('[generate-quiz] Server error:', error);
