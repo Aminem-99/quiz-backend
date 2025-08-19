@@ -7,7 +7,6 @@ import { createClient } from '@supabase/supabase-js';
 // Chargement des variables d'environnement
 dotenv.config();
 
-// Logs de debug pour les clés Supabase
 console.log('[DEBUG] Raw SUPABASE_ANON_KEY:', process.env.SUPABASE_ANON_KEY);
 console.log('[DEBUG] SUPABASE_URL:', process.env.SUPABASE_URL);
 
@@ -29,7 +28,7 @@ app.use(cors());
 app.use(express.json());
 
 /**
- * Générer un quiz via DeepSeek avec cache
+ * Générer un quiz via DeepSeek avec cache — PATCH ANTI-GÉNÉRATION MULTIPLE
  */
 app.post('/api/generate-quiz', async (req, res) => {
   try {
@@ -52,18 +51,18 @@ app.post('/api/generate-quiz', async (req, res) => {
       return res.status(400).json({ error: 'Missing required parameters' });
     }
 
-    // Recherche tous les quiz existants pour ces paramètres
-    const cacheQuery = supabase
+    // Recherche du quiz en cache pour cette config (une seule occurrence !)
+    let cacheQuery = supabase
       .from('quiz_cache')
       .select('quiz_json')
       .eq('difficulty', difficulty)
       .eq('category', category);
-    
-    if (period) cacheQuery.eq('period', period);
-    if (geographical_sphere) cacheQuery.eq('geographical_sphere', geographical_sphere);
-    if (ID_Name) cacheQuery.eq('ID_Name', ID_Name);
-    if (moment) cacheQuery.eq('moment', moment);
-    if (episode) cacheQuery.eq('episode', episode);
+
+    if (period) cacheQuery = cacheQuery.eq('period', period);
+    if (geographical_sphere) cacheQuery = cacheQuery.eq('geographical_sphere', geographical_sphere);
+    if (ID_Name) cacheQuery = cacheQuery.eq('ID_Name', ID_Name);
+    if (moment) cacheQuery = cacheQuery.eq('moment', moment);
+    if (episode) cacheQuery = cacheQuery.eq('episode', episode);
 
     const { data: cachedQuizzes, error: cacheError } = await cacheQuery
       .order('created_at', { ascending: false });
@@ -72,14 +71,15 @@ app.post('/api/generate-quiz', async (req, res) => {
       console.warn('[generate-quiz] Erreur recherche cache quiz:', cacheError.message);
     }
 
-    if (cachedQuizzes && cachedQuizzes.length >= 5) {
-      // Choisit un quiz au hasard
-      const idx = Math.floor(Math.random() * cachedQuizzes.length);
-      console.log('[generate-quiz] Quiz trouvé en cache (diversité)');
-      return res.json(cachedQuizzes[idx].quiz_json);
+    // PATCH: si au moins un quiz existe, on ne génère rien !
+    if (cachedQuizzes && cachedQuizzes.length > 0) {
+      console.log('[generate-quiz] Quiz trouvé en cache, PAS de génération AI !');
+      return res.json(cachedQuizzes[0].quiz_json);
     }
 
-    // Définition du contexte
+    // —————————————————————————————
+    // Si aucun quiz trouvé, on génère UNE FOIS !
+    // —————————————————————————————
     const contexte = `
 Tu es professeur d'histoire. 
 Sujet du quiz : ${category}
@@ -90,7 +90,6 @@ Zone géographique : ${geographical_sphere || 'non précisée'}
 Pays/Région : ${ID_Name || 'non précisé'}
 Mode : ${mode || 'standard'}
 `;
-    // ===========================================================
 
     let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
     const prompt = `${promptIntro}${contexte}
@@ -110,7 +109,7 @@ Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
 Si une question n'a qu'une bonne réponse, "answer" doit être un tableau avec un seul élément et "multi": false.
 La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
 
-    const payload = {
+    const aiPayload = {
       model: 'deepseek-chat',
       messages: [
         { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
@@ -123,7 +122,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
     try {
       response = await axios.post(
         'https://api.deepseek.com/v1/chat/completions',
-        payload,
+        aiPayload,
         {
           headers: {
             'Content-Type': 'application/json',
@@ -132,7 +131,6 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
         }
       );
     } catch (apiErr) {
-      // LOG: Erreur DeepSeek
       console.error('[generate-quiz] DeepSeek API error:', apiErr.response?.data || apiErr.message);
       return res.status(500).json({ error: 'Failed to call DeepSeek API', details: apiErr.response?.data || apiErr.message });
     }
@@ -142,16 +140,10 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
     try {
       questions = JSON.parse(content);
     } catch (parseErr) {
-      // LOG: Parsing JSON brut échoué
       console.warn('[generate-quiz] Parsing brut échoué, tentative extraction JSON:', content);
 
-      // Nettoyage des balises markdown ```json ... ```
       let cleanedContent = content.trim();
-
-      // Supprime les blocs de markdown
       cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
-
-      // Tente d'extraire uniquement le tableau JSON
       const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
       if (arrayMatch) {
         cleanedContent = arrayMatch[0];
@@ -160,7 +152,6 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mai
       try {
         questions = JSON.parse(cleanedContent);
       } catch (parseErr2) {
-        // LOG: Parsing JSON échoué après nettoyage
         console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
         return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
       }
@@ -202,13 +193,13 @@ app.post('/api/submit-answers', async (req, res) => {
   try {
     const {
       user_id,
-      answers,            // tableau des réponses de l'utilisateur
-      quiz,               // tableau des questions avec réponses correctes et explications
+      answers,
+      quiz,
       difficulty,
       category,
       period,
       geographical_sphere,
-      time_taken          // optionnel
+      time_taken
     } = req.body;
 
     // LOG: Payload reçu
@@ -218,11 +209,14 @@ app.post('/api/submit-answers', async (req, res) => {
       return res.status(400).json({ error: 'Missing required parameters for score submission' });
     }
 
-    // Correction des réponses utilisateur
     let correct_answers = 0;
     const total_questions = quiz.length;
     const corrections = quiz.map((question, idx) => {
-      const isCorrect = answers[idx] === question.answer;
+      // Multi réponse compatible
+      const userAnswerArr = Array.isArray(answers[idx]) ? answers[idx] : [answers[idx]];
+      const correctAnswerArr = Array.isArray(question.answer) ? question.answer : [question.answer];
+      const isCorrect = userAnswerArr.length === correctAnswerArr.length &&
+        userAnswerArr.every(ans => correctAnswerArr.includes(ans));
       if (isCorrect) correct_answers++;
       return {
         question: question.question,
@@ -234,7 +228,6 @@ app.post('/api/submit-answers', async (req, res) => {
     });
     const score = correct_answers;
 
-    // Insérer score dans quiz_scores
     const payload = {
       user_id,
       score,
@@ -247,22 +240,18 @@ app.post('/api/submit-answers', async (req, res) => {
       correct_answers
     };
 
-    // Log le payload pour debug
     console.log('[submit-answers] Payload:', payload);
 
-    // Insertion dans Supabase
     const { data, error } = await supabase
       .from('quiz_scores')
       .insert([payload])
       .select();
 
     if (error) {
-      // LOG: Erreur Supabase
       console.error('[submit-answers] Supabase error:', error.message);
       return res.status(500).json({ error: error.message });
     }
 
-    // LOG: Score enregistré
     console.log('[submit-answers] Score enregistré:', data?.[0]);
 
     res.json({
@@ -271,7 +260,6 @@ app.post('/api/submit-answers', async (req, res) => {
       data: data?.[0] || null
     });
   } catch (error) {
-    // LOG: Erreur globale
     console.error('[submit-answers] Server error:', error);
     res.status(500).json({ error: 'Failed to submit answers', details: error.message });
   }
@@ -282,7 +270,6 @@ app.post('/api/submit-answers', async (req, res) => {
  */
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    // LOG: requête leaderboard
     console.log('[leaderboard] Requête leaderboard');
 
     const { data, error } = await supabase
@@ -292,14 +279,12 @@ app.get('/api/leaderboard', async (req, res) => {
       .limit(10);
 
     if (error) {
-      // LOG: Erreur leaderboard
       console.error('[leaderboard] Supabase error:', error.message);
       return res.status(500).json({ error: error.message });
     }
 
     res.json(data);
   } catch (error) {
-    // LOG: Erreur globale
     console.error('[leaderboard] Server error:', error);
     res.status(500).json({ error: 'Failed to fetch leaderboard', details: error.message });
   }
