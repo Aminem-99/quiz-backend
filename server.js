@@ -362,6 +362,183 @@ app.get('/api/leaderboard', async (req, res) => {
   }
 });
 
+// In-memory sample data for historical GDP and GDP_PPP values
+const sampleHistoricalData = [
+  { country: 'United States', year: 2020, GDP: 20950000, GDP_PPP: 20950000 },
+  { country: 'United States', year: 2021, GDP: 23320000, GDP_PPP: 23320000 },
+  { country: 'United States', year: 2022, GDP: 25460000, GDP_PPP: 25460000 },
+  { country: 'China', year: 2020, GDP: 14730000, GDP_PPP: 24270000 },
+  { country: 'China', year: 2021, GDP: 17730000, GDP_PPP: 27310000 },
+  { country: 'China', year: 2022, GDP: 17940000, GDP_PPP: 30330000 },
+  { country: 'Germany', year: 2020, GDP: 3850000, GDP_PPP: 4560000 },
+  { country: 'Germany', year: 2021, GDP: 4260000, GDP_PPP: 4980000 },
+  { country: 'Germany', year: 2022, GDP: 4260000, GDP_PPP: 5120000 },
+  { country: 'Japan', year: 2020, GDP: 4940000, GDP_PPP: 5290000 },
+  { country: 'Japan', year: 2021, GDP: 4940000, GDP_PPP: 5520000 },
+  { country: 'Japan', year: 2022, GDP: 4230000, GDP_PPP: 5610000 },
+  { country: 'India', year: 2020, GDP: 3110000, GDP_PPP: 9260000 },
+  { country: 'India', year: 2021, GDP: 3570000, GDP_PPP: 10220000 },
+  { country: 'India', year: 2022, GDP: 3740000, GDP_PPP: 11750000 },
+];
+
+/**
+ * Fetch historical data for specified metrics (GDP, GDP_PPP)
+ */
+app.get('/api/historical-data', async (req, res) => {
+  try {
+    const { metric, country, year_start, year_end } = req.query;
+    
+    console.log('[historical-data] Query params:', req.query);
+    
+    // Default to GDP if no metric specified
+    const requestedMetric = metric || 'GDP';
+    
+    // Validate metric
+    if (!['GDP', 'GDP_PPP'].includes(requestedMetric)) {
+      return res.status(400).json({ 
+        error: 'Invalid metric. Supported metrics: GDP, GDP_PPP' 
+      });
+    }
+    
+    // Start with all data
+    let filteredData = [...sampleHistoricalData];
+    
+    // Apply filters if provided
+    if (country) {
+      filteredData = filteredData.filter(row => 
+        row.country.toLowerCase().includes(country.toLowerCase())
+      );
+    }
+    if (year_start) {
+      filteredData = filteredData.filter(row => row.year >= parseInt(year_start));
+    }
+    if (year_end) {
+      filteredData = filteredData.filter(row => row.year <= parseInt(year_end));
+    }
+    
+    // Sort by year
+    filteredData.sort((a, b) => a.year - b.year);
+    
+    // Format data for response - always include both metrics for frontend flexibility
+    const responseData = filteredData.map(row => ({
+      country: row.country,
+      year: row.year,
+      GDP: row.GDP,
+      GDP_PPP: row.GDP_PPP,
+      // Add the requested metric as the primary field
+      value: row[requestedMetric]
+    }));
+    
+    res.json({
+      metric: requestedMetric,
+      data: responseData,
+      count: responseData.length
+    });
+    
+  } catch (error) {
+    console.error('[historical-data] Server error:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch historical data', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get available metrics for the DatasPage dropdown
+ */
+app.get('/api/metrics', (req, res) => {
+  try {
+    const metrics = [
+      { value: 'GDP', label: 'Gross Domestic Product (GDP)' },
+      { value: 'GDP_PPP', label: 'GDP (Purchasing Power Parity)' }
+    ];
+    
+    res.json({ metrics });
+  } catch (error) {
+    console.error('[metrics] Server error:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch metrics', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * Get sample historical data (for testing/demo purposes)
+ */
+app.get('/api/seed-historical-data', async (req, res) => {
+  try {
+    console.log('[seed-historical-data] Returning sample data...');
+    
+    res.json({ 
+      message: 'Sample historical data available',
+      count: sampleHistoricalData.length,
+      data: sampleHistoricalData,
+      metrics_available: ['GDP', 'GDP_PPP']
+    });
+    
+  } catch (error) {
+    console.error('[seed-historical-data] Server error:', error);
+    res.status(500).json({ 
+      error: 'Failed to get historical data', 
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * API Documentation endpoint
+ */
+app.get('/api/docs', (req, res) => {
+  const documentation = {
+    title: 'Quiz Backend API',
+    version: '1.0.0',
+    description: 'API for quiz generation and historical data retrieval',
+    endpoints: {
+      health: {
+        method: 'GET',
+        path: '/api/health',
+        description: 'Health check endpoint'
+      },
+      metrics: {
+        method: 'GET',
+        path: '/api/metrics',
+        description: 'Get available metrics for historical data',
+        response: {
+          metrics: [
+            { value: 'GDP', label: 'Gross Domestic Product (GDP)' },
+            { value: 'GDP_PPP', label: 'GDP (Purchasing Power Parity)' }
+          ]
+        }
+      },
+      historicalData: {
+        method: 'GET',
+        path: '/api/historical-data',
+        description: 'Fetch historical GDP and GDP_PPP data',
+        parameters: {
+          metric: 'GDP or GDP_PPP (default: GDP)',
+          country: 'Filter by country name (optional)',
+          year_start: 'Filter by start year (optional)',
+          year_end: 'Filter by end year (optional)'
+        },
+        examples: [
+          '/api/historical-data?metric=GDP',
+          '/api/historical-data?metric=GDP_PPP&country=China',
+          '/api/historical-data?metric=GDP&year_start=2021&year_end=2022'
+        ]
+      },
+      sampleData: {
+        method: 'GET',
+        path: '/api/seed-historical-data',
+        description: 'Get sample historical data for testing'
+      }
+    }
+  };
+  
+  res.json(documentation);
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', message: 'Server is running' });
 });
