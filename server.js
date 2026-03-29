@@ -23,6 +23,80 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// ── In-memory dedup guard (évite les doubles appels simultanés) ───────────────
+const pendingGenerations = new Map();
+
+// ── Helper : appel DeepSeek avec timeout et max_tokens ───────────────────────
+async function callDeepSeek(prompt, difficulty) {
+  const aiPayload = {
+    model: 'deepseek-chat',
+    messages: [
+      { role: 'system', content: 'You are a history expert who creates educational quiz questions. Reply only with valid JSON.' },
+      { role: 'user', content: prompt }
+    ],
+    temperature: 0.7,
+    max_tokens: 1800, // ✅ FIX: limite les tokens — 5 questions = ~800-1200 tokens
+  };
+
+  const response = await axios.post(
+    'https://api.deepseek.com/v1/chat/completions',
+    aiPayload,
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+      },
+      timeout: 35000, // ✅ FIX: 35s timeout — évite les requêtes zombies sur Railway cold start
+    }
+  );
+
+  const content = response.data.choices?.[0]?.message?.content;
+  let questions;
+  try {
+    questions = JSON.parse(content);
+  } catch {
+    let cleaned = content.trim()
+      .replace(/```(?:json)?/g, '')
+      .replace(/```/g, '')
+      .trim();
+    const match = cleaned.match(/\[\s*{[\s\S]*}\s*]/);
+    if (match) cleaned = match[0];
+    questions = JSON.parse(cleaned);
+  }
+
+  if (!Array.isArray(questions)) throw new Error('Response is not an array');
+  return questions;
+}
+
+// ── Helper : build prompt ─────────────────────────────────────────────────────
+function buildPrompt(category, period, episode, moment, geographical_sphere, ID_Name, mode, difficulty) {
+  const contexte = `
+Tu es professeur d'histoire.
+Sujet du quiz : ${category}
+Période : ${period || 'non précisée'}
+Épisode : ${episode || 'non précisé'}
+Moment clé : ${moment || 'non précisé'}
+Zone géographique : ${geographical_sphere || 'non précisée'}
+Pays/Région : ${ID_Name || 'non précisé'}
+Mode : ${mode || 'standard'}
+`;
+  return `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. ${contexte}
+Certaines questions doivent avoir plusieurs bonnes réponses (minimum 1, maximum 3), indique-les dans un tableau "answer": ["Option correcte 1", "Option correcte 2"].
+Ajoute aussi une propriété "multi": true si la question a plusieurs bonnes réponses, sinon "multi": false.
+Chaque question doit avoir 4 propositions de réponse différentes.
+Retourne UNIQUEMENT le JSON, sous la forme d'une liste d'objets :
+[
+  {
+    "question": "Texte de la question",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer": ["Option correcte 1"],
+    "explanation": "Explication courte",
+    "multi": false
+  }
+]
+La difficulté des questions est ${difficulty}. Ne réponds que par le JSON.`;
+}
+
 /**
  * Générer un quiz (solo OU multi selon présence matchId)
  */
@@ -37,10 +111,9 @@ app.post('/api/generate-quiz', async (req, res) => {
       moment,
       episode,
       mode,
-      matchId // multi uniquement
+      matchId
     } = req.body;
 
-    // Log
     console.log('[generate-quiz] Payload reçu:', req.body);
 
     if (!difficulty || !category) {
@@ -51,7 +124,6 @@ app.post('/api/generate-quiz', async (req, res) => {
     // ------ MODE MULTIJOUEUR -------
     // ===============================
     if (matchId) {
-      // Récupération ultra safe du match
       const { data: match, error: matchError } = await supabase
         .from('quiz_match')
         .select('quiz_payload, difficulty, category, period, geographical_sphere, ID_Name, moment, episode, mode, status')
@@ -62,197 +134,114 @@ app.post('/api/generate-quiz', async (req, res) => {
         return res.status(404).json({ error: 'Match not found', details: matchError?.message });
       }
 
-      // Backend ultra safe : ne génère QUE si quiz_payload est null ET status "waiting"
       if (match.quiz_payload) {
-        console.log(`[generate-quiz] Quiz déjà généré pour match ${matchId}, renvoi du payload existant`);
+        console.log(`[generate-quiz] Quiz déjà généré pour match ${matchId}`);
         return res.json(match.quiz_payload);
       }
       if (match.status !== 'waiting') {
-        // Si le match n'est pas en attente, on ne génère pas
-        console.log(`[generate-quiz] Match ${matchId} status n'est pas 'waiting', renvoi quiz_payload ou erreur`);
-        // On renvoie le quiz ou une erreur explicite
         return res.status(409).json({ error: 'Quiz déjà généré ou match déjà commencé.' });
       }
 
-      // Génération du quiz (avec la config du match)
-      const contexte = `
-Tu es professeur d'histoire. 
-Sujet du quiz : ${match.category}
-Période : ${match.period || 'non précisée'}
-Épisode : ${match.episode || 'non précisé'}
-Moment clé : ${match.moment || 'non précisé'}
-Zone géographique : ${match.geographical_sphere || 'non précisée'}
-Pays/Région : ${match.ID_Name || 'non précisé'}
-Mode : ${match.mode || 'standard'}
-`;
-
-      let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${match.category}. `;
-      const prompt = `${promptIntro}${contexte}
-Certaines questions doivent avoir plusieurs bonnes réponses (minimum 1, maximum 3), indique-les dans un tableau "answer": ["Option correcte 1", "Option correcte 2"]. 
-Ajoute aussi une propriété "multi": true si la question a plusieurs bonnes réponses, sinon "multi": false.
-Chaque question doit avoir 4 propositions de réponse différentes.
-Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
-[
-  {
-    "question": "Texte de la question",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": ["Option correcte 1", "Option correcte 2"],
-    "explanation": "Explication de la bonne réponse",
-    "multi": true
-  }
-]
-Si une question n'a qu'une bonne réponse, "answer" doit être un tableau avec un seul élément et "multi": false.
-La difficulté des questions est ${match.difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
-
-      const aiPayload = {
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7
-      };
-
-      let response;
-      try {
-        response = await axios.post(
-          'https://api.deepseek.com/v1/chat/completions',
-          aiPayload,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-            }
-          }
-        );
-      } catch (apiErr) {
-        console.error('[generate-quiz] DeepSeek API error:', apiErr.response?.data || apiErr.message);
-        return res.status(500).json({ error: 'Failed to call DeepSeek API', details: apiErr.response?.data || apiErr.message });
+      // Dedup guard multi
+      if (pendingGenerations.has(matchId)) {
+        console.log(`[generate-quiz] Dedup: attente génération en cours pour match ${matchId}`);
+        const result = await pendingGenerations.get(matchId);
+        return res.json(result);
       }
 
-      const content = response.data.choices?.[0]?.message?.content;
-      let questions;
-      try {
-        questions = JSON.parse(content);
-      } catch (parseErr) {
-        let cleanedContent = content.trim();
-        cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
-        const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
-        if (arrayMatch) {
-          cleanedContent = arrayMatch[0];
-        }
-        try {
-          questions = JSON.parse(cleanedContent);
-        } catch (parseErr2) {
-          console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
-          return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
-        }
-      }
+      const genPromise = (async () => {
+        const prompt = buildPrompt(match.category, match.period, match.episode, match.moment, match.geographical_sphere, match.ID_Name, match.mode, match.difficulty);
+        const questions = await callDeepSeek(prompt, match.difficulty);
 
-      // Ecriture atomique : update quiz_payload UNIQUEMENT si quiz_payload est encore null ET status "waiting"
-const { data: updated, error: updateError } = await supabase
-  .from('quiz_match')
-  .update({ quiz_payload: questions, status: 'ready' })
-  .eq('id', matchId)
-  .is('quiz_payload', null)
-  .eq('status', 'waiting')
-  .select('quiz_payload');
+        const { data: updated } = await supabase
+          .from('quiz_match')
+          .update({ quiz_payload: questions, status: 'ready' })
+          .eq('id', matchId)
+          .is('quiz_payload', null)
+          .eq('status', 'waiting')
+          .select('quiz_payload');
 
-      if (updated && updated.quiz_payload) {
-        console.log(`[generate-quiz] Quiz généré et enregistré pour match ${matchId}`);
-        return res.json(updated.quiz_payload);
-      }
-      // Si quelqu'un l'a généré entre-temps, on relit et renvoie
-      const { data: finalMatch, error: finalError } = await supabase
-        .from('quiz_match')
-        .select('quiz_payload')
-        .eq('id', matchId)
-        .single();
-      if (finalError || !finalMatch) {
-        return res.status(500).json({ error: 'Failed to retrieve quiz after concurrent generation', details: finalError?.message });
-      }
-      console.log(`[generate-quiz] Quiz généré concurrent pour match ${matchId}, renvoi quiz_payload`);
-      return res.json(finalMatch.quiz_payload);
+        if (updated?.[0]?.quiz_payload) return updated[0].quiz_payload;
+
+        const { data: finalMatch } = await supabase
+          .from('quiz_match')
+          .select('quiz_payload')
+          .eq('id', matchId)
+          .single();
+        return finalMatch?.quiz_payload;
+      })();
+
+      pendingGenerations.set(matchId, genPromise);
+      genPromise.finally(() => pendingGenerations.delete(matchId));
+
+      const questions = await genPromise;
+      return res.json(questions);
     }
 
     // ===============================
     // --------- MODE SOLO -----------
     // ===============================
-    const contexte = `
-Tu es professeur d'histoire. 
-Sujet du quiz : ${category}
-Période : ${period || 'non précisée'}
-Épisode : ${episode || 'non précisé'}
-Moment clé : ${moment || 'non précisé'}
-Zone géographique : ${geographical_sphere || 'non précisée'}
-Pays/Région : ${ID_Name || 'non précisé'}
-Mode : ${mode || 'standard'}
-`;
 
-    let promptIntro = `Génère en français 5 questions à choix multiple comme si tu étais un professeur de la matière suivante : ${category}. `;
-    const prompt = `${promptIntro}${contexte}
-Certaines questions doivent avoir plusieurs bonnes réponses (minimum 1, maximum 3), indique-les dans un tableau "answer": ["Option correcte 1", "Option correcte 2"]. 
-Ajoute aussi une propriété "multi": true si la question a plusieurs bonnes réponses, sinon "multi": false.
-Chaque question doit avoir 4 propositions de réponse différentes.
-Retourne le résultat au format JSON, sous la forme d'une liste d'objets :
-[
-  {
-    "question": "Texte de la question",
-    "options": ["Option A", "Option B", "Option C", "Option D"],
-    "answer": ["Option correcte 1", "Option correcte 2"],
-    "explanation": "Explication de la bonne réponse",
-    "multi": true
-  }
-]
-Si une question n'a qu'une bonne réponse, "answer" doit être un tableau avec un seul élément et "multi": false.
-La difficulté des questions est ${difficulty}. Ne réponds que par le JSON, mais ajoute une explication supplémentaire.`;
+    // ✅ FIX: Cache Supabase — évite de rappeler DeepSeek pour le même quiz
+    const cacheKey = { difficulty, category, period: period || null, geographical_sphere: geographical_sphere || null, ID_Name: ID_Name || null, moment: moment || null, episode: episode || null };
 
-    const aiPayload = {
-      model: 'deepseek-chat',
-      messages: [
-        { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
-        { role: 'user', content: prompt }
-      ],
-      temperature: 0.7
-    };
+    let cacheQuery = supabase
+      .from('quiz_cache')
+      .select('quiz_json')
+      .eq('difficulty', difficulty)
+      .eq('category', category);
+    if (period)               cacheQuery = cacheQuery.eq('period', period);
+    if (geographical_sphere)  cacheQuery = cacheQuery.eq('geographical_sphere', geographical_sphere);
+    if (ID_Name)              cacheQuery = cacheQuery.eq('ID_Name', ID_Name);
+    if (moment)               cacheQuery = cacheQuery.eq('moment', moment);
+    if (episode)              cacheQuery = cacheQuery.eq('episode', episode);
 
-    let response;
-    try {
-      response = await axios.post(
-        'https://api.deepseek.com/v1/chat/completions',
-        aiPayload,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-          }
-        }
-      );
-    } catch (apiErr) {
-      console.error('[generate-quiz] DeepSeek API error:', apiErr.response?.data || apiErr.message);
-      return res.status(500).json({ error: 'Failed to call DeepSeek API', details: apiErr.response?.data || apiErr.message });
+    const { data: cached } = await cacheQuery.order('created_at', { ascending: false }).limit(10);
+
+    // ✅ FIX: seuil abaissé à 2 (avant : 5 — impossible à atteindre avec peu d'utilisateurs)
+    if (cached && cached.length >= 2) {
+      const idx = Math.floor(Math.random() * cached.length);
+      console.log(`[generate-quiz] Cache hit (${cached.length} quizs dispo), renvoi quiz #${idx}`);
+      return res.json(cached[idx].quiz_json);
     }
 
-    const content = response.data.choices?.[0]?.message?.content;
-    let questions;
-    try {
-      questions = JSON.parse(content);
-    } catch (parseErr) {
-      let cleanedContent = content.trim();
-      cleanedContent = cleanedContent.replace(/```(?:json)?/g, '').replace(/```/g, '').trim();
-      const arrayMatch = cleanedContent.match(/\[\s*{[\s\S]*}\s*]/);
-      if (arrayMatch) {
-        cleanedContent = arrayMatch[0];
-      }
-      try {
-        questions = JSON.parse(cleanedContent);
-      } catch (parseErr2) {
-        console.error('[generate-quiz] Parsing JSON échoué après nettoyage:', parseErr2.message);
-        return res.status(500).json({ error: 'Failed to parse DeepSeek response JSON', details: parseErr2.message });
-      }
+    // ✅ FIX: Dedup in-memory pour éviter doubles appels simultanés (StrictMode / double clic)
+    const dedupKey = JSON.stringify(cacheKey);
+    if (pendingGenerations.has(dedupKey)) {
+      console.log('[generate-quiz] Dedup: réutilisation requête en cours');
+      const result = await pendingGenerations.get(dedupKey);
+      return res.json(result);
     }
 
-    // On ne stocke rien en solo, on renvoie juste le quiz généré
+    console.log(`[generate-quiz] Cache miss (${cached?.length ?? 0} quizs), appel DeepSeek`);
+
+    const genPromise = (async () => {
+      const prompt = buildPrompt(category, period, episode, moment, geographical_sphere, ID_Name, mode, difficulty);
+      const questions = await callDeepSeek(prompt, difficulty);
+
+      // ✅ FIX: Stocker en cache pour les prochains appels
+      const { error: insertError } = await supabase
+        .from('quiz_cache')
+        .insert([{
+          difficulty,
+          category,
+          period: period || null,
+          geographical_sphere: geographical_sphere || null,
+          ID_Name: ID_Name || null,
+          moment: moment || null,
+          episode: episode || null,
+          quiz_json: questions,
+        }]);
+      if (insertError) console.warn('[generate-quiz] Cache insert error:', insertError.message);
+      else console.log('[generate-quiz] Quiz mis en cache');
+
+      return questions;
+    })();
+
+    pendingGenerations.set(dedupKey, genPromise);
+    genPromise.finally(() => setTimeout(() => pendingGenerations.delete(dedupKey), 500));
+
+    const questions = await genPromise;
     return res.json(questions);
 
   } catch (error) {
@@ -313,8 +302,6 @@ app.post('/api/submit-answers', async (req, res) => {
       correct_answers
     };
 
-    console.log('[submit-answers] Payload:', payload);
-
     const { data, error } = await supabase
       .from('quiz_scores')
       .insert([payload])
@@ -325,13 +312,7 @@ app.post('/api/submit-answers', async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    console.log('[submit-answers] Score enregistré:', data?.[0]);
-
-    res.json({
-      corrections,
-      score,
-      data: data?.[0] || null
-    });
+    res.json({ corrections, score, data: data?.[0] || null });
   } catch (error) {
     console.error('[submit-answers] Server error:', error);
     res.status(500).json({ error: 'Failed to submit answers', details: error.message });
@@ -343,21 +324,15 @@ app.post('/api/submit-answers', async (req, res) => {
  */
 app.get('/api/leaderboard', async (req, res) => {
   try {
-    console.log('[leaderboard] Requête leaderboard');
     const { data, error } = await supabase
       .from('quiz_leaderboard')
       .select('user_id,username,total_score,highest_score,average_score,last_quiz_date,avatar_url')
       .order('total_score', { ascending: false })
       .limit(10);
 
-    if (error) {
-      console.error('[leaderboard] Supabase error:', error.message);
-      return res.status(500).json({ error: error.message });
-    }
-
+    if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   } catch (error) {
-    console.error('[leaderboard] Server error:', error);
     res.status(500).json({ error: 'Failed to fetch leaderboard', details: error.message });
   }
 });
@@ -369,4 +344,3 @@ app.get('/api/health', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
-
