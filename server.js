@@ -66,11 +66,26 @@ app.post('/api/generate-quiz', async (req, res) => {
       console.warn('[generate-quiz] Erreur recherche cache quiz:', cacheError.message);
     }
 
-    if (cachedQuizzes && cachedQuizzes.length >= 2) { // Cache hit after 2 stored quizzes
-      // Choisit un quiz au hasard
-      const idx = Math.floor(Math.random() * cachedQuizzes.length);
-      console.log('[generate-quiz] Quiz trouvé en cache (diversité)');
+    const MAX_CACHE = 5; // Générer jusqu'à 5 variantes, puis 100% cache
+    const cacheCount = cachedQuizzes?.length || 0;
+
+    if (cacheCount >= MAX_CACHE) {
+      // Cache plein → pioche au hasard parmi les variantes
+      const idx = Math.floor(Math.random() * cacheCount);
+      console.log(`[generate-quiz] Cache plein (${cacheCount}/${MAX_CACHE}) → variante #${idx + 1}`);
       return res.json(cachedQuizzes[idx].quiz_json);
+    }
+
+    if (cacheCount >= 1) {
+      // Cache partiel → 50% chance d'utiliser le cache, 50% de générer une nouvelle variante
+      // Plus le cache est rempli, plus on favorise le cache
+      const useCache = Math.random() < (cacheCount / MAX_CACHE);
+      if (useCache) {
+        const idx = Math.floor(Math.random() * cacheCount);
+        console.log(`[generate-quiz] Cache partiel (${cacheCount}/${MAX_CACHE}) → variante #${idx + 1}`);
+        return res.json(cachedQuizzes[idx].quiz_json);
+      }
+      console.log(`[generate-quiz] Cache partiel (${cacheCount}/${MAX_CACHE}) → génération nouvelle variante`);
     }
 
     // Construction du prompt selon la logique demandée
@@ -118,7 +133,7 @@ La difficulté des questions est ${difficulty}. Ne réponds que par le JSON.`;
         { role: 'system', content: 'You are a history expert who creates educational quiz questions.' },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.7,
+      temperature: 0.8, // légèrement plus élevé pour diversifier les variantes
       max_tokens: 1500, // limit token usage — 5 questions need ~800-1000 tokens max
     };
 
